@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Antarmuka dilayani dari bundel aplikasi lewat protokol tauri://, bukan dari origin jauh — jadi perintah milik aplikasi sendiri tidak perlu izin eksplisit di sini. Bandingkan dengan spike Rantai, yang wajib memberi izin ke http://127.0.0.1:* karena antarmukanya dilayani openwork-server lewat HTTP.",
+  "windows": ["utama"],
+  "permissions": ["core:default"]
+}

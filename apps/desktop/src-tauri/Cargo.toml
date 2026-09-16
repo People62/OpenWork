@@ -1,0 +1,24 @@
+[package]
+name = "rantai"
+version = "0.0.1"
+edition = "2021"
+description = "Rantai — cangkang desktop Tauri berikut BE lokalnya, satu proses Rust."
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+# Binary yang lebih kecil dan cepat; biaya waktu build dibayar di CI, bukan di
+# putaran pengembangan.
+codegen-units = 1
+lto = true
+strip = true
