@@ -25,6 +25,9 @@ thiserror = "2.0.20"
 # OpenCode di 127.0.0.1. Den diurus sisi TypeScript, bukan dari sini. Menyalakan
 # rustls berarti menyeret aws-lc dan seluruh rantainya tanpa ada yang memakainya.
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream"] }
+tauri-plugin-deep-link = "2.4.10"
+tauri-plugin-opener = "2.5.5"
+url = "2.5.8"
 
 [profile.dev]
 incremental = true

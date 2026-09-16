@@ -4,16 +4,17 @@ Aplikasi desktop dengan pendekatan OpenWork, tapi sisi kliennya diganti: **BE
 lokal Rust di dalam Tauri, antarmuka Next.js, bun sebagai perkakas**. Den (server
 pusat) dan OpenCode (mesin agen) dipertahankan apa adanya.
 
-Keadaan saat ini: **Fase 2 — OpenCode dikelola dari Rust.** Mesin dinyalakan,
-diawasi, dan dimatikan dari dalam proses Tauri; bagian `@opencode-ai/sdk` yang
-dipakai ditulis ulang terhadap HTTP API-nya; token mengalir ke layar sebagai
-peristiwa bertipe dan bisa dihentikan di tengah.
+Keadaan saat ini: **Fase 3 — antarmuka dipindahkan**, dimulai dari alur masuk
+Den. Dua sentuhan native-nya — menerima `openwork://den-auth` dan membuka
+browser sistem — sudah berdiri dan **diuji di CI**, sesuatu yang tidak pernah
+tercakup di Rantai.
 
 ## Susunan
 
 ```
 apps/ui                    Next.js, App Router, output: 'export'
   app/bindings.ts          Dihasilkan dari Rust — jangan disunting tangan
+  app/den/                 Alur masuk Den: pengurai tautan dan layarnya
 apps/desktop/src-tauri     Program Rust — cangkang Tauri sekaligus BE lokal
   src/domain.rs            Workspace, sesi, pesan
   src/db.rs                Koneksi SQLite dan migrasinya
@@ -23,6 +24,7 @@ apps/desktop/src-tauri     Program Rust — cangkang Tauri sekaligus BE lokal
   src/mesin/mod.rs         Menyalakan, mengawasi, mematikan proses mesin
   src/mesin/klien.rs       Bagian SDK yang dipakai, ditulis ulang terhadap HTTP API
   src/percakapan.rs        Streaming token sebagai peristiwa, dan penghentiannya
+  src/tautan.rs            Deep link openwork:// dan membuka browser sistem
   src/smoke.rs             Mode pemeriksaan yang dipakai CI
 .github/workflows          Matriks tiga platform
 ```
@@ -41,6 +43,7 @@ bun run build            # next build --export, lalu installer
 bun run typecheck        # tipe antarmuka
 bun run rust:lint        # clippy, peringatan dianggap galat
 bun run rust:test        # tes Rust; ini juga yang menulis bindings.ts
+bun run test             # tes antarmuka
 ```
 
 ## Tipe dihasilkan, tidak ditulis dua kali
@@ -76,6 +79,7 @@ yang pertama tidak:
 | `ipc-bulat` | Jawaban Rust sampai ke layar, lalu kembali lagi ke Rust |
 | `data-bulat` | SQLite ditulis lalu dibaca kembali utuh |
 | `mesin-absen-benar` | Ketiadaan binary mesin menghasilkan pesan yang benar |
+| `tautan-diterima` | `openwork://den-auth` sampai ke layar dengan grant yang benar |
 
 ```bash
 RANTAI_SMOKE=1 \
@@ -128,6 +132,40 @@ di dua jalan keluar yang pasti dilewati — `RunEvent::Exit` milik Tauri, dan
 pengawas mode smoke. Ini ditemukan dengan mendaftar proses sesudah percobaan,
 bukan dengan membaca kode: versi pertamanya meninggalkan OpenCode hidup dan
 dipungut `init`.
+
+## Alur masuk Den
+
+Dari seluruh alur masuk, hanya dua hal yang native: menerima
+`openwork://den-auth` dari sistem, dan membuka browser sistem. Sisanya
+TypeScript yang pindah apa adanya.
+
+Kedua hal native itu digarap paling awal di Fase 3 dengan sengaja. Registrasi
+skema URL berperilaku berbeda tiap sistem operasi, paling rapuh justru di mode
+pengembangan, dan **di Rantai ia tidak pernah tercakup uji CI sama sekali**.
+
+Sekarang ia diuji. CI meluncurkan aplikasi dengan `openwork://den-auth?grant=…`
+dan menuntut grant yang benar sampai ke layar. Tautan yang tidak sampai, atau
+sampai dengan grant lain, menggagalkan CI — keduanya sudah dibuktikan bisa
+gagal, bukan hanya diasumsikan.
+
+Di Linux dan Windows sistem menyerahkan tautan lewat argumen baris perintah.
+macOS memakai Apple Events, jadi di sana ia berjalan sebagai penyelidikan yang
+tidak memblokir sampai jalurnya diketahui.
+
+### Tautan peluncuran dibaca, bukan dikuras
+
+Tautan yang *meluncurkan* aplikasi tiba jauh sebelum halaman termuat — dan itu
+justru kasus yang paling sering: pengguna mengklik tautan sementara aplikasi
+belum berjalan. Ia karena itu dicatat sebagai fakta yang bisa dibaca berulang,
+bukan sebagai antrean yang dikuras. Versi pertama kehilangannya sama sekali;
+versi kedua mengurasnya dan dua pembaca saling mendahului. Keduanya ketahuan
+dengan menjalankan, bukan dengan membaca.
+
+### Jalur cadangan
+
+Selalu ada kotak tempel manual di sebelahnya: pengguna menempel tautan utuh atau
+kodenya saja. Murni TypeScript, nol native, dan karena itu satu-satunya bagian
+alur masuk yang pasti bekerja di mana pun deep link bermasalah.
 
 ## Yang berikutnya
 

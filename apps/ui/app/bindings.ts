@@ -46,12 +46,24 @@ export const commands = {
 	 *  mesin tetap menghasilkan token ke ruang hampa.
 	 */
 	hentikanPercakapan: (sesiMesinId: string) => typedError<null, GalatMesin>(__TAURI_INVOKE("hentikan_percakapan", { sesiMesinId })),
+	statusTautanDalam: () => __TAURI_INVOKE<StatusTautan>("status_tautan_dalam"),
+	daftarkanTautanDalam: () => typedError<StatusTautan, string>(__TAURI_INVOKE("daftarkan_tautan_dalam")),
+	/**
+	 *  Membuka browser sistem. Sentuhan native kedua, dan satu-satunya yang lain.
+	 * 
+	 *  Alur masuk Den mengirim pengguna ke halaman web, lalu menunggu kembali lewat
+	 *  deep link. Membukanya di dalam webview aplikasi tidak bisa: sesi dan cookie
+	 *  di sana bukan sesi browser pengguna.
+	 */
+	bukaDiBrowser: (url: string) => typedError<null, string>(__TAURI_INVOKE("buka_di_browser", { url })),
+	tautanPeluncuran: () => __TAURI_INVOKE<string[]>("tautan_peluncuran"),
 };
 
 /** Events */
 export const events = {
 	kepingan: makeEvent<Kepingan>("kepingan"),
 	selesai: makeEvent<Selesai>("selesai"),
+	tautanDalam: makeEvent<TautanDalam>("tautan-dalam"),
 };
 
 /* Types */
@@ -86,6 +98,11 @@ export type GalatMesin = {
 export type HarapanSmoke = {
 	aktif: boolean,
 	mesinAbsen: boolean,
+	/**
+	 *  Kalau terisi, antarmuka wajib membuktikan grant inilah yang sampai
+	 *  lewat tautan dalam.
+	 */
+	tautan: string | null,
 };
 
 /**
@@ -162,6 +179,33 @@ export type StatusMesin = {
 	jalurBinary: string | null,
 	sumber: string | null,
 	detikMenyala: number | null,
+};
+
+export type StatusTautan = {
+	skema: string,
+	/**
+	 *  Apakah sistem benar-benar menyerahkan skema ini kepada kita. Ditanyakan
+	 *  ke sistem, bukan diasumsikan dari keberhasilan pendaftaran.
+	 */
+	terdaftar: boolean,
+	/**
+	 *  Terisi kalau sistem menolak menjawab — di beberapa lingkungan (mis. CI
+	 *  headless) pertanyaannya sendiri gagal, dan itu bukan hal yang sama
+	 *  dengan "tidak terdaftar".
+	 */
+	galat: string | null,
+};
+
+/**
+ *  Tiba saat sistem menyerahkan `openwork://…` kepada aplikasi.
+ * 
+ *  Dikirim sebagai peristiwa bertipe, bukan `CustomEvent` lewat `webview.eval`
+ *  seperti di spike Rantai. Spike itu harus meniru bentuk peristiwa Electron
+ *  karena antarmukanya belum berubah; di sini tidak ada yang perlu ditiru, dan
+ *  peristiwa bertipe ikut terbawa ke `bindings.ts`.
+ */
+export type TautanDalam = {
+	urls: string[],
 };
 
 /**
