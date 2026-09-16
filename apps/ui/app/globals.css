@@ -72,8 +72,8 @@ dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 20px; margi
 dt { color: var(--muted); font-size: 13px; }
 dd { margin: 0; font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
 
-ul.sinyal { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-ul.sinyal li { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 13px; }
+ul.signals { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+ul.signals li { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 13px; }
 
 .pip {
   font-size: 10.5px;
@@ -87,7 +87,7 @@ ul.sinyal li { display: flex; align-items: center; gap: 10px; font-family: var(-
 .pip.ok { color: var(--ok); background: var(--ok-bg); }
 .pip.wait { color: var(--wait); background: var(--wait-bg); }
 
-.galat {
+.error {
   font-family: var(--mono);
   font-size: 13px;
   white-space: pre-wrap;
@@ -98,7 +98,7 @@ ul.sinyal li { display: flex; align-items: center; gap: 10px; font-family: var(-
   margin: 0;
 }
 
-.tombol-baris { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 16px; }
+.button-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 16px; }
 
 button {
   font-family: var(--sans);
@@ -130,7 +130,7 @@ textarea {
 }
 textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 
-.aliran {
+.stream {
   margin-top: 16px;
   max-height: 320px;
   overflow-y: auto;
@@ -141,8 +141,8 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px;
   padding-top: 14px;
 }
 
-.kepingan { display: flex; flex-direction: column; gap: 4px; }
-.kepingan pre {
+.chunk { display: flex; flex-direction: column; gap: 4px; }
+.chunk pre {
   margin: 0;
   font-family: var(--mono);
   font-size: 12px;
@@ -151,11 +151,11 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.kepingan .pip { align-self: flex-start; }
+.chunk .pip { align-self: flex-start; }
 
 /* ---- ruang kerja: dua panel ---- */
 
-.ruang {
+.workspace {
   display: grid;
   grid-template-columns: minmax(220px, 300px) 1fr;
   gap: 1px;
@@ -166,8 +166,8 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px;
   min-height: 460px;
 }
 
-.ruang-sisi,
-.ruang-utama {
+.workspace-side,
+.workspace-main {
   background: var(--surface);
   padding: 18px 20px;
   display: flex;
@@ -176,29 +176,29 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px;
   min-width: 0;
 }
 
-.ruang-utama { gap: 14px; }
+.workspace-main { gap: 14px; }
 
-.ruang-bagian { display: flex; flex-direction: column; gap: 10px; }
+.workspace-section { display: flex; flex-direction: column; gap: 10px; }
 
-.ruang-kepala {
+.workspace-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
-.ruang-kepala .label { margin: 0; }
-.ruang-kepala button { padding: 4px 10px; font-size: 12.5px; }
+.workspace-head .label { margin: 0; }
+.workspace-head button { padding: 4px 10px; font-size: 12.5px; }
 
-.ruang-kosong {
+.workspace-empty {
   margin: 0;
   font-size: 13.5px;
   color: var(--muted);
   line-height: 1.55;
 }
 
-.ruang-daftar { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.workspace-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 
-.baris {
+.row {
   width: 100%;
   text-align: left;
   display: flex;
@@ -210,10 +210,10 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px;
   border-radius: 5px;
   cursor: pointer;
 }
-.baris:hover { background: var(--sunk); border-color: transparent; color: inherit; }
-.baris.terpilih { background: var(--sunk); border-color: var(--accent); }
+.row:hover { background: var(--sunk); border-color: transparent; color: inherit; }
+.row.selected { background: var(--sunk); border-color: var(--accent); }
 
-.baris-judul {
+.row-title {
   font-size: 13.5px;
   font-weight: 500;
   color: var(--ink);
@@ -221,7 +221,7 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.baris-sub {
+.row-sub {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--muted);
@@ -232,7 +232,7 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px;
   text-align: left;
 }
 
-.percakapan {
+.conversation {
   flex: 1;
   min-height: 240px;
   max-height: 420px;
@@ -243,7 +243,7 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px;
   padding-right: 4px;
 }
 
-.pesan {
+.message {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -252,17 +252,17 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px;
   background: var(--sunk);
   border-left: 2px solid var(--rule);
 }
-.pesan-pengguna { border-left-color: var(--accent); }
-.pesan-asisten { border-left-color: var(--ok); }
-.pesan p { margin: 0; font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-.pesan .label { margin: 0; }
+.message-user { border-left-color: var(--accent); }
+.message-assistant { border-left-color: var(--ok); }
+.message p { margin: 0; font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message .label { margin: 0; }
 
-.ruang-kirim { display: flex; flex-direction: column; gap: 8px; }
-.ruang-kirim textarea { margin-top: 0; }
-.ruang-kirim button { align-self: flex-start; }
+.workspace-send { display: flex; flex-direction: column; gap: 8px; }
+.workspace-send textarea { margin-top: 0; }
+.workspace-send button { align-self: flex-start; }
 
 @media (max-width: 720px) {
-  .ruang { grid-template-columns: 1fr; }
+  .workspace { grid-template-columns: 1fr; }
 }
 
 select {

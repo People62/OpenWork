@@ -1,27 +1,23 @@
-// Rantai — Fase 1: data dan domain di Rust.
+// Rantai — the desktop shell and its local backend, one Rust process.
 //
-// Tauri *adalah* program Rust; ini bukan cangkang yang BE-nya disambungkan dari
-// luar. BE lokal tinggal di berkas-berkas di sebelah ini, dan antarmuka
-// memanggilnya lewat `invoke()` — tanpa HTTP loopback, port dinamis, CORS, atau
-// token.
-//
-// Seluruh permukaan perintah masih sinkron. Async baru masuk di Fase 2, saat
-// proses OpenCode dikelola dari sini — dan di situlah kesulitan Rust yang
-// sebenarnya menunggu.
+// Tauri *is* a Rust program; this is not a shell with a backend attached from
+// outside. The local backend lives in the files next to this one, and the
+// interface calls it through `invoke()` — with no HTTP loopback, no dynamic
+// port, no CORS and no token.
 
 #![cfg_attr(
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
 )]
 
+mod commands;
+mod conversation;
 mod db;
+mod deeplink;
 mod domain;
-mod galat;
-mod mesin;
-mod percakapan;
-mod perintah;
+mod engine;
+mod error;
 mod smoke;
-mod tautan;
 
 use serde::Serialize;
 use specta::Type;
@@ -30,157 +26,155 @@ use tauri_specta::{collect_commands, collect_events, Builder};
 
 #[derive(Serialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct Sapaan {
-    pesan: String,
+pub struct Greeting {
+    message: String,
     platform: String,
-    arsitektur: String,
-    versi_tauri: String,
-    versi_aplikasi: String,
+    arch: String,
+    tauri_version: String,
+    app_version: String,
 }
 
-/// Perintah pertama, dari Fase 0. Ia bertahan karena mode smoke memakainya
-/// untuk membuktikan IPC bulat sebelum menyentuh basis data.
+/// The first command, from Phase 0. It survives because smoke mode uses it to
+/// prove the IPC round-trip before anything touches the database.
 #[tauri::command]
 #[specta::specta]
-fn halo(nama: String) -> Sapaan {
-    Sapaan {
-        pesan: format!("Halo dari Rust, {nama}."),
+fn hello(name: String) -> Greeting {
+    Greeting {
+        message: format!("Hello from Rust, {name}."),
         platform: std::env::consts::OS.to_string(),
-        arsitektur: std::env::consts::ARCH.to_string(),
-        versi_tauri: tauri::VERSION.to_string(),
-        versi_aplikasi: env!("CARGO_PKG_VERSION").to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        tauri_version: tauri::VERSION.to_string(),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
     }
 }
 
-/// Satu tempat yang mendaftarkan seluruh perintah. Dipakai dua kali: oleh
-/// aplikasi saat berjalan, dan oleh tes yang menulis `bindings.ts`. Karena
-/// keduanya membaca daftar yang sama, tipe di layar tidak bisa melenceng dari
-/// tipe di Rust tanpa ada yang gagal.
-fn pembangun() -> Builder<tauri::Wry> {
+/// The single place every command is registered. Used twice: by the application
+/// when it runs, and by the test that writes `bindings.ts`. Because both read
+/// the same list, the types on screen cannot drift from the types in Rust
+/// without something failing.
+fn builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
         .commands(collect_commands![
-            halo,
-            smoke::lapor_sinyal,
-            smoke::harapan_smoke,
-            perintah::buat_workspace,
-            perintah::daftar_workspace,
-            perintah::buat_sesi,
-            perintah::daftar_sesi,
-            perintah::tambah_pesan,
-            perintah::daftar_pesan,
-            perintah::periksa_basis_data,
-            percakapan::status_mesin,
-            percakapan::nyalakan_mesin,
-            percakapan::matikan_mesin,
-            percakapan::daftar_model,
-            percakapan::buat_sesi_mesin,
-            percakapan::kirim_prompt,
-            percakapan::hentikan_percakapan,
-            tautan::status_tautan_dalam,
-            tautan::daftarkan_tautan_dalam,
-            tautan::buka_di_browser,
-            tautan::tautan_peluncuran,
+            hello,
+            smoke::report_signal,
+            smoke::smoke_expectations,
+            commands::create_workspace,
+            commands::list_workspaces,
+            commands::create_session,
+            commands::list_sessions,
+            commands::add_message,
+            commands::list_messages,
+            commands::check_database,
+            conversation::engine_status,
+            conversation::start_engine,
+            conversation::stop_engine,
+            conversation::list_models,
+            conversation::create_engine_session,
+            conversation::send_prompt,
+            conversation::stop_conversation,
+            deeplink::deep_link_status,
+            deeplink::register_deep_link,
+            deeplink::open_in_browser,
+            deeplink::launch_links,
         ])
-        // Peristiwa ikut dihasilkan ke bindings.ts, lengkap dengan pendengarnya.
+        // Events carry into bindings.ts too, listeners and all.
         .events(collect_events![
-            mesin::klien::Kepingan,
-            percakapan::Selesai,
-            tautan::TautanDalam
+            engine::client::Chunk,
+            conversation::Finished,
+            deeplink::DeepLink
         ])
 }
 
 fn main() {
-    let pembangun = pembangun();
+    let builder = builder();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(smoke::Papan::default())
-        .manage(mesin::Mesin::default())
-        .manage(percakapan::Percakapan::default())
-        .manage(tautan::Peluncuran::default())
-        .invoke_handler(pembangun.invoke_handler())
-        // Kalau sinyal tidak pernah tiba, pertanyaan pertamanya selalu sama:
-        // apakah halamannya termuat, dan dari alamat mana. Tanpa jejak ini,
-        // kegagalan mode smoke tampak seperti diam total.
-        .on_page_load(|jendela, muatan| {
-            if smoke::aktif() {
+        .manage(smoke::Board::default())
+        .manage(engine::Engine::default())
+        .manage(conversation::Conversation::default())
+        .manage(deeplink::LaunchLinks::default())
+        .invoke_handler(builder.invoke_handler())
+        // When a signal never arrives, the first question is always the same:
+        // did the page load, and from what address. Without this trace, a smoke
+        // failure looks like total silence.
+        .on_page_load(|window, payload| {
+            if smoke::enabled() {
                 eprintln!(
-                    "smoke: halaman {:?} di {} ({})",
-                    muatan.event(),
-                    muatan.url(),
-                    jendela.label()
+                    "smoke: page {:?} at {} ({})",
+                    payload.event(),
+                    payload.url(),
+                    window.label()
                 );
             }
         })
         .setup(move |app| {
-            pembangun.mount_events(app);
-            tautan::pasang(app.handle());
+            builder.mount_events(app);
+            deeplink::install(app.handle());
 
-            let dir_data = app
+            let data_dir = app
                 .path()
                 .app_data_dir()
-                .expect("tidak ada direktori data aplikasi");
-            let jalur = db::jalur_bawaan(dir_data);
+                .expect("there is no application data directory");
+            let path = db::default_path(data_dir);
 
-            match db::buka(&jalur) {
+            match db::open(&path) {
                 Ok(db) => {
                     app.manage(db);
                 }
                 Err(e) => {
-                    // Cetak seluruh rantainya. Basis data yang gagal dibuka
-                    // membuat setiap perintah berikutnya gagal dengan alasan
-                    // yang terdengar seperti hal lain.
-                    eprintln!("gagal membuka basis data di {}: {e}", jalur.display());
+                    // Print the whole chain. A database that fails to open makes
+                    // every later command fail for a reason that sounds like
+                    // something else.
+                    eprintln!("could not open the database at {}: {e}", path.display());
                     return Err(Box::new(e));
                 }
             }
 
-            if smoke::aktif() {
-                eprintln!("smoke: basis data di {}", jalur.display());
-                smoke::awasi(app.handle().clone());
+            if smoke::enabled() {
+                eprintln!("smoke: database at {}", path.display());
+                smoke::watch(app.handle().clone());
             }
 
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("gagal membangun aplikasi Tauri")
-        // Menutup jendela tidak otomatis mematikan proses anak: `kill_on_drop`
-        // hanya berlaku pada jalur drop yang normal, dan tidak semua jalan
-        // keluar melewatinya. Gerbang Fase 2 menuntut tidak ada proses yatim,
-        // jadi pematiannya dilakukan di sini, di jalan keluar yang pasti
-        // dilewati.
-        .run(|handle, peristiwa| {
-            if matches!(peristiwa, tauri::RunEvent::Exit) {
-                let mesin = handle.state::<mesin::Mesin>();
-                if let Err(e) = tauri::async_runtime::block_on(mesin.matikan()) {
-                    eprintln!("gagal mematikan mesin saat keluar: {e}");
+        .expect("could not build the Tauri application")
+        // Closing the window does not automatically stop the child process:
+        // `kill_on_drop` only covers the normal drop path, and not every exit
+        // goes through it. The Phase 2 gate asks for no orphaned processes, so
+        // the shutdown happens here, on the exit path that is always taken.
+        .run(|handle, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                let engine = handle.state::<engine::Engine>();
+                if let Err(e) = tauri::async_runtime::block_on(engine.stop()) {
+                    eprintln!("could not stop the engine on exit: {e}");
                 }
             }
         });
 }
 
 #[cfg(test)]
-mod tes {
+mod tests {
     use super::*;
     use specta_typescript::Typescript;
 
-    /// Tempat `bindings.ts` mendarat, relatif terhadap src-tauri.
-    const TUJUAN_BINDINGS: &str = "../../ui/app/bindings.ts";
+    /// Where `bindings.ts` lands, relative to src-tauri.
+    const BINDINGS_PATH: &str = "../../ui/app/bindings.ts";
 
-    /// Inilah gerbang Fase 1. Tes ini menulis ulang `bindings.ts` dari daftar
-    /// perintah di Rust; CI menjalankannya lalu menuntut `git diff` bersih. Jadi
-    /// mengubah bentuk data di Rust tanpa memperbarui berkas itu menggagalkan
-    /// CI, dan memperbaruinya memunculkan galat tipe di Next.js sampai
-    /// pemanggilnya ikut diperbaiki.
+    /// This is the Phase 1 gate. The test rewrites `bindings.ts` from the command
+    /// list in Rust; CI runs it and then demands a clean `git diff`. So changing
+    /// the shape of the data in Rust without updating that file fails CI, and
+    /// updating it raises type errors in Next.js until the callers follow.
     #[test]
-    fn bindings_mutakhir() {
-        pembangun()
+    fn bindings_are_current() {
+        builder()
             .export(
-                Typescript::default().header("// Dihasilkan dari Rust. Jangan disunting tangan.\n"),
-                TUJUAN_BINDINGS,
+                Typescript::default().header("// Generated from Rust. Do not edit by hand.\n"),
+                BINDINGS_PATH,
             )
-            .expect("gagal menulis bindings.ts");
+            .expect("could not write bindings.ts");
     }
 }

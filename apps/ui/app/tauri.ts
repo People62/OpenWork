@@ -1,73 +1,73 @@
-// Satu-satunya tempat yang tahu bahwa kita sedang di dalam Tauri.
+// The only place that knows we are inside Tauri.
 //
-// Di OpenWork peran ini dipegang `window.__OPENWORK_ELECTRON__`, yang tersebar
-// di 22 berkas. Di sini ia dikurung sejak awal supaya tidak pernah tersebar
-// lagi — dan supaya `next dev` di tab browser biasa tetap bisa dibuka.
+// In OpenWork this role is played by `window.__OPENWORK_ELECTRON__`, spread
+// across 22 files. Here it is fenced in from the start so it never spreads again
+// — and so `next dev` can still be opened in an ordinary browser tab.
 //
-// Perintah dan tipenya sendiri tidak ditulis di sini: semuanya datang dari
-// `bindings.ts`, yang dihasilkan dari Rust dan tidak boleh disunting tangan.
+// The commands and types themselves are not written here: they all come from
+// `bindings.ts`, which is generated from Rust and must not be edited by hand.
 
 export { commands, events } from "./bindings";
 export type {
-  Galat,
-  GalatMesin,
-  Kepingan,
+  Chunk,
+  DatabaseCheck,
+  DeepLink,
+  DeepLinkStatus,
+  EngineError,
+  EngineStatus,
+  Error as CommandFailure,
+  Finished,
+  Greeting,
+  Message,
   Model,
-  Peran,
-  PeriksaDb,
-  Pesan,
-  Sapaan,
-  Selesai,
-  Sesi,
-  StatusMesin,
-  StatusTautan,
-  TautanDalam,
+  Role,
+  Session,
   Workspace,
 } from "./bindings";
 
-export function diDalamTauri(): boolean {
+export function insideTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-/// Bentuk yang dikembalikan tauri-specta untuk tiap perintah yang mengembalikan
-/// `Result` di Rust. Ia tidak melempar — cabang galatnya dikembalikan sebagai
-/// data, dan TypeScript menolak kode yang tidak menanganinya. Itu perilaku yang
-/// benar, tapi di pemanggil biasa `try/catch` lebih enak dibaca.
-type HasilPerintah<T, E> =
+/// The shape tauri-specta returns for every command that returns a `Result` in
+/// Rust. It does not throw — the error branch comes back as data, and TypeScript
+/// refuses code that does not handle it. That is the right behaviour, but at an
+/// ordinary call site `try/catch` reads better.
+type CommandOutcome<T, E> =
   | { status: "ok"; data: T }
   | { status: "error"; error: E };
 
-/// Galat dari Rust yang sudah berbentuk `Error` JavaScript, tapi tetap membawa
-/// nilai aslinya yang bertipe di `.galat` — jadi pemanggil yang perlu
-/// membedakan `tidakDitemukan` dari `basisData` masih bisa.
-export class GalatPerintah<E> extends Error {
-  readonly galat: E;
+/// An error from Rust already shaped as a JavaScript `Error`, but still carrying
+/// its typed original value on `.error` — so a caller that needs to tell
+/// `notFound` from `database` still can.
+export class CommandError<E> extends Error {
+  readonly error: E;
 
-  constructor(galat: E) {
-    super(jelaskan(galat));
-    this.name = "GalatPerintah";
-    this.galat = galat;
+  constructor(error: E) {
+    super(describe(error));
+    this.name = "CommandError";
+    this.error = error;
   }
 }
 
-function jelaskan(galat: unknown): string {
-  if (typeof galat === "string") return galat;
-  if (
-    typeof galat === "object" &&
-    galat !== null &&
-    "jenis" in galat &&
-    "pesan" in galat
-  ) {
-    return `${String(galat.jenis)}: ${String(galat.pesan)}`;
+function describe(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (typeof error === "object" && error !== null) {
+    if ("message" in error && typeof error.message === "string") {
+      return error.message;
+    }
+    if ("kind" in error && "message" in error) {
+      return `${String(error.kind)}: ${String(error.message)}`;
+    }
   }
-  return JSON.stringify(galat);
+  return JSON.stringify(error);
 }
 
-/// Membuka hasil perintah, atau melempar galat yang tetap bertipe.
-export async function buka<T, E>(
-  janji: Promise<HasilPerintah<T, E>>,
+/// Unwraps a command outcome, or throws an error that is still typed.
+export async function unwrap<T, E>(
+  promise: Promise<CommandOutcome<T, E>>,
 ): Promise<T> {
-  const hasil = await janji;
-  if (hasil.status === "error") throw new GalatPerintah(hasil.error);
-  return hasil.data;
+  const outcome = await promise;
+  if (outcome.status === "error") throw new CommandError(outcome.error);
+  return outcome.data;
 }

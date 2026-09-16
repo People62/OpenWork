@@ -1,158 +1,160 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { buka, commands, events, type StatusTautan } from "../tauri";
+import { commands, events, unwrap, type DeepLinkStatus } from "../tauri";
 import {
-  DEN_BAWAAN,
-  uraiTautanMasuk,
-  uraiTempelanManual,
-  type TautanMasukDen,
-} from "./tautan";
+  DEFAULT_DEN,
+  parseAuthLink,
+  parseManualPaste,
+  type DenAuthLink,
+} from "./links";
 
-/// Alur masuk Den, digarap paling awal di Fase 3 dengan sengaja.
+/// The Den sign-in, built first in Phase 3 on purpose.
 ///
-/// Dari seluruh alur masuk, hanya dua hal yang native: menerima
-/// `openwork://den-auth` dari sistem, dan membuka browser sistem. Sisanya
-/// TypeScript yang pindah apa adanya. Kedua hal native itulah yang paling
-/// rapuh — registrasi skema URL berperilaku berbeda tiap OS, paling rapuh di
-/// mode pengembangan, dan di Rantai tidak pernah tercakup uji CI sama sekali.
+/// Of the whole sign-in, only two things are native: receiving
+/// `openwork://den-auth` from the system, and opening the system browser. The
+/// rest is TypeScript that moves across unchanged. Those two are the fragile
+/// part — URL scheme registration behaves differently on every OS, is at its most
+/// fragile in development mode, and in Rantai was never covered by CI at all.
 ///
-/// Karena itu layar ini menampilkan keadaan registrasinya apa adanya, dan
-/// selalu menyediakan jalur tempel manual di sebelahnya. Jalur itu murni
-/// TypeScript, nol native, dan bekerja bahkan ketika deep link tidak.
-export function PanelDen() {
-  const [status, setStatus] = useState<StatusTautan | null>(null);
-  const [tempelan, setTempelan] = useState("");
-  const [diterima, setDiterima] = useState<TautanMasukDen | null>(null);
-  const [asal, setAsal] = useState<"deep-link" | "tempel" | null>(null);
-  const [galat, setGalat] = useState<string | null>(null);
+/// So this screen shows the registration state exactly as it is, and always
+/// keeps a manual paste path beside it. That path is pure TypeScript, zero
+/// native, and works even when deep links do not.
+export function DenPanel() {
+  const [status, setStatus] = useState<DeepLinkStatus | null>(null);
+  const [pasted, setPasted] = useState("");
+  const [received, setReceived] = useState<DenAuthLink | null>(null);
+  const [origin, setOrigin] = useState<"deep-link" | "paste" | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const terima = useCallback((urls: string[]) => {
+  const accept = useCallback((urls: string[]) => {
     for (const url of urls) {
-      const terurai = uraiTautanMasuk(url);
-      if (terurai) {
-        setDiterima(terurai);
-        setAsal("deep-link");
-        setGalat(null);
+      const parsed = parseAuthLink(url);
+      if (parsed) {
+        setReceived(parsed);
+        setOrigin("deep-link");
+        setError(null);
         return;
       }
     }
-    // Tautan yang tiba tapi tidak dikenali bukan hal yang boleh didiamkan —
-    // ia berarti Den mengirim bentuk yang belum kita tangani.
+    // A link that arrives but is not recognised is not something to pass over in
+    // silence — it means Den is sending a shape we do not handle yet.
     if (urls.length > 0) {
-      setGalat(`tautan tiba tapi tidak dikenali: ${urls.join(", ")}`);
+      setError(`a link arrived but was not recognised: ${urls.join(", ")}`);
     }
   }, []);
 
   useEffect(() => {
-    void commands.statusTautanDalam().then(setStatus);
+    void commands.deepLinkStatus().then(setStatus);
 
-    // Dibaca lebih dulu, baru mendengarkan. Tautan yang *meluncurkan* aplikasi
-    // tiba sebelum halaman ini ada — dan itu justru kasus yang paling sering
-    // pada alur masuk: pengguna mengklik tautan sementara aplikasi belum
-    // berjalan. Ia dibaca, bukan dikuras, supaya pemeriksa smoke juga bisa
-    // membacanya; versi pertamanya menguras dan keduanya saling mendahului.
-    void commands.tautanPeluncuran().then(terima);
+    // Read first, then listen. The link that *launched* the application arrives
+    // before this page exists — and that is the commonest case of all for a
+    // sign-in: the user clicks a link while the application is not running. It is
+    // read, not drained, so the smoke check can read it too; the first version
+    // drained it and the two raced.
+    void commands.launchLinks().then(accept);
 
-    const lepas = events.tautanDalam.listen((e) => terima(e.payload.urls));
+    const drop = events.deepLink.listen((e) => accept(e.payload.urls));
 
     return () => {
-      void lepas.then((l) => l());
+      void drop.then((stop) => stop());
     };
-  }, [terima]);
+  }, [accept]);
 
-  const daftarkan = useCallback(async () => {
-    setGalat(null);
+  const register = useCallback(async () => {
+    setError(null);
     try {
-      setStatus(await buka(commands.daftarkanTautanDalam()));
+      setStatus(await unwrap(commands.registerDeepLink()));
     } catch (e) {
-      setGalat(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
-  const bukaBrowser = useCallback(async () => {
-    setGalat(null);
+  const openBrowser = useCallback(async () => {
+    setError(null);
     try {
-      await buka(commands.bukaDiBrowser(`${DEN_BAWAAN}/desktop-auth`));
+      await unwrap(commands.openInBrowser(`${DEFAULT_DEN}/desktop-auth`));
     } catch (e) {
-      setGalat(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
-  const tempel = useCallback(() => {
-    const terurai = uraiTempelanManual(tempelan);
-    if (!terurai) {
-      setGalat(
-        "tempelan tidak dikenali — tempelkan tautan openwork://den-auth… atau kodenya saja",
+  const usePaste = useCallback(() => {
+    const parsed = parseManualPaste(pasted);
+    if (!parsed) {
+      setError(
+        "the paste was not recognised — paste an openwork://den-auth… link, or just the code",
       );
       return;
     }
-    setDiterima(terurai);
-    setAsal("tempel");
-    setGalat(null);
-  }, [tempelan]);
+    setReceived(parsed);
+    setOrigin("paste");
+    setError(null);
+  }, [pasted]);
 
   return (
     <div className="card">
-      <p className="label">Masuk ke Den</p>
+      <p className="label">Sign in to Den</p>
 
       <dl>
-        <dt>Skema</dt>
-        <dd>{status ? `${status.skema}://` : "…"}</dd>
-        <dt>Terdaftar di sistem</dt>
+        <dt>Scheme</dt>
+        <dd>{status ? `${status.scheme}://` : "…"}</dd>
+        <dt>Registered with the system</dt>
         <dd>
           {status === null
             ? "…"
-            : status.galat
-              ? `tidak bisa ditanyakan — ${status.galat}`
-              : status.terdaftar
-                ? "ya"
-                : "belum"}
+            : status.error
+              ? `could not be asked — ${status.error}`
+              : status.registered
+                ? "yes"
+                : "not yet"}
         </dd>
         <dt>Den</dt>
-        <dd>{DEN_BAWAAN}</dd>
+        <dd>{DEFAULT_DEN}</dd>
       </dl>
 
-      <div className="tombol-baris">
-        <button onClick={daftarkan} disabled={status?.terdaftar === true}>
-          Daftarkan skema
+      <div className="button-row">
+        <button onClick={register} disabled={status?.registered === true}>
+          Register the scheme
         </button>
-        <button onClick={bukaBrowser}>Buka browser</button>
+        <button onClick={openBrowser}>Open the browser</button>
       </div>
 
       <p className="label" style={{ marginTop: 20 }}>
-        Jalur cadangan — tempel sendiri
+        Fallback — paste it yourself
       </p>
       <textarea
-        value={tempelan}
-        onChange={(e) => setTempelan(e.target.value)}
-        placeholder="openwork://den-auth?grant=… atau kodenya saja"
+        value={pasted}
+        onChange={(e) => setPasted(e.target.value)}
+        placeholder="openwork://den-auth?grant=… or just the code"
         rows={2}
       />
-      <div className="tombol-baris">
-        <button onClick={tempel} disabled={!tempelan.trim()}>
-          Pakai tempelan
+      <div className="button-row">
+        <button onClick={usePaste} disabled={!pasted.trim()}>
+          Use the paste
         </button>
       </div>
 
-      {galat && <pre className="galat">{galat}</pre>}
+      {error && <pre className="error">{error}</pre>}
 
-      {diterima && (
+      {received && (
         <>
           <p className="label" style={{ marginTop: 20 }}>
-            Grant diterima lewat {asal === "deep-link" ? "deep link" : "tempelan"}
+            Grant received by {origin === "deep-link" ? "deep link" : "paste"}
           </p>
           <dl>
             <dt>Grant</dt>
-            {/* Hanya awalannya. Grant adalah kredensial, dan layar bisa terekam
-                tangkapan layar atau bagikan-layar. */}
-            <dd>{diterima.grant.slice(0, 8)}… ({diterima.grant.length} karakter)</dd>
+            {/* Only the prefix. A grant is a credential, and a screen can end up
+                in a screenshot or a shared display. */}
+            <dd>
+              {received.grant.slice(0, 8)}… ({received.grant.length} characters)
+            </dd>
             <dt>Den</dt>
-            <dd>{diterima.denBaseUrl}</dd>
+            <dd>{received.denBaseUrl}</dd>
           </dl>
           <p className="label">
-            Penukaran grant jadi sesi menyusul — itu klien Den, dan ia
-            TypeScript yang pindah apa adanya.
+            Exchanging the grant for a session comes next — that is the Den
+            client, and it is TypeScript that moves across unchanged.
           </p>
         </>
       )}

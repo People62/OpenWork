@@ -1,8 +1,9 @@
-// Mode smoke — dipakai CI untuk membedakan "terbangun" dari "terbuka dan hidup".
+// Smoke mode — what CI uses to tell "it built" apart from "it opened and is
+// alive".
 //
-// Aplikasinya dijalankan sungguhan, menunggu sinyal yang berurutan, lalu keluar
-// dengan kode yang berarti. Langkah CI yang hijau belum tentu mengerjakan
-// sesuatu; ini yang membuatnya mengerjakan sesuatu.
+// The application is genuinely run, waits for an ordered set of signals, then
+// exits with a code that means something. A green CI step does not necessarily
+// do anything; this is what makes it do something.
 
 use std::path::PathBuf;
 use std::sync::{Condvar, Mutex};
@@ -12,257 +13,257 @@ use serde::Serialize;
 use specta::Type;
 use tauri::{Manager, State};
 
-/// Urutannya berarti: sinyal berikutnya tidak mungkin tiba kalau yang sebelumnya
-/// tidak.
+/// The order means something: a later signal cannot arrive unless the one before
+/// it did.
 ///
-///   1. `webview-termuat` — halaman termuat, bundel jalan, React ter-mount
-///   2. `ipc-bulat`       — jawaban Rust sampai ke layar lalu kembali ke Rust
-///   3. `data-bulat`      — data ditulis ke SQLite lalu dibaca kembali utuh
-const SINYAL_INTI: [&str; 3] = ["webview-termuat", "ipc-bulat", "data-bulat"];
+///   1. `webview-loaded`  — the page loaded, the bundle ran, React mounted
+///   2. `ipc-roundtrip`   — Rust's answer reached the screen and went back again
+///   3. `data-roundtrip`  — data was written to SQLite and read back intact
+const CORE_SIGNALS: [&str; 3] = ["webview-loaded", "ipc-roundtrip", "data-roundtrip"];
 
-/// Sinyal keempat, hanya diminta kalau CI memang menjalankan aplikasi tanpa
-/// binary mesin. Gerbang Fase 2 menuntutnya secara eksplisit: jalankan tanpa
-/// binary mesin, dan pastikan pesannya benar.
+/// A fourth signal, only required when CI deliberately runs the application
+/// without an engine binary. The Phase 2 gate asks for it explicitly: run
+/// without the engine binary, and make sure the message is right.
 ///
-/// Ia dipisahkan karena OpenCode 176 MB dan tidak ikut di dalam repo. Menguji
-/// *ketiadaannya* justru tidak butuh unduhan apa pun — jadi bagian gerbang ini
-/// bisa berjalan di tiap putaran CI, di ketiga platform, dengan harga nol.
-const SINYAL_MESIN_ABSEN: &str = "mesin-absen-benar";
+/// It is kept separate because OpenCode is 176 MB and is not in the repository.
+/// Testing its *absence* needs no download at all — so this part of the gate can
+/// run on every CI round, on all three platforms, for nothing.
+const SIGNAL_ENGINE_ABSENT: &str = "engine-absent-correct";
 
-/// Sinyal kelima, diminta kalau aplikasi diluncurkan dengan tautan dalam dan
-/// CI menyebutkan grant apa yang seharusnya sampai.
+/// A fifth signal, required when CI launches the application with a deep link and
+/// says which grant should arrive.
 ///
-/// Registrasi skema URL tidak pernah tercakup uji CI di Rantai sama sekali —
-/// tiga sinyal yang hijau di sana hanya menguji webview, React, bridge, dan
-/// IPC. Ini bagian dengan ketidakpastian tertinggi di seluruh alur masuk, jadi
-/// ia diuji di sini alih-alih ditemukan rusak nanti.
-const SINYAL_TAUTAN: &str = "tautan-diterima";
+/// URL scheme registration was never covered by CI in Rantai at all — the three
+/// green signals there only exercised the webview, React, the bridge and IPC.
+/// This is the highest-uncertainty part of the whole sign-in, so it is tested
+/// here rather than discovered broken later.
+const SIGNAL_DEEP_LINK: &str = "deep-link-received";
 
-/// Sinyal keenam. Rilis 1 menuntut percakapan "tersimpan di SQLite dan bisa
-/// dibuka kembali" — dan itu hanya bisa dibuktikan dengan menjalankan aplikasi
-/// dua kali: sekali menulis, sekali membaca sesudah prosesnya benar-benar mati.
+/// A sixth signal. Release 1 promises a conversation is "saved in SQLite and can
+/// be reopened" — and that is only provable by running the application twice:
+/// once to write, once to read after the process has genuinely died.
 ///
-/// Tes dalam satu proses tidak membuktikannya. Ia bisa lulus sepenuhnya dari
-/// cache di memori tanpa satu byte pun pernah menyentuh disk.
-const SINYAL_SIMPAN: &str = "data-bertahan";
+/// A test inside one process proves nothing about it. It can pass entirely from
+/// an in-memory cache without a single byte ever touching disk.
+const SIGNAL_PERSISTENCE: &str = "data-persisted";
 
-#[derive(Debug, Clone, Serialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct UjiSimpan {
-    /// "tulis" pada jalannya yang pertama, "baca" pada yang kedua.
-    pub mode: String,
-    /// Penanda yang sama di kedua jalan, supaya yang dicari persis yang ditulis.
-    pub tanda: String,
+const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+
+/// When this is on, the application is run with RANTAI_OPENCODE deliberately
+/// pointing at nothing, and the interface must prove the message is right.
+pub fn expects_engine_absent() -> bool {
+    std::env::var("RANTAI_SMOKE_ENGINE_ABSENT").is_ok_and(|v| v == "1")
 }
 
-fn uji_simpan() -> Option<UjiSimpan> {
-    let mode = std::env::var("RANTAI_SMOKE_SIMPAN").ok()?;
-    if mode != "tulis" && mode != "baca" {
-        return None;
-    }
-    let tanda = std::env::var("RANTAI_SMOKE_SIMPAN_TANDA").ok()?;
-    if tanda.is_empty() {
-        return None;
-    }
-    Some(UjiSimpan { mode, tanda })
-}
-
-/// Grant yang seharusnya sampai lewat tautan dalam, kalau CI memintanya.
-pub fn tautan_diharapkan() -> Option<String> {
-    std::env::var("RANTAI_SMOKE_TAUTAN")
+/// The grant that should arrive through a deep link, if CI asks for one.
+pub fn expected_deep_link() -> Option<String> {
+    std::env::var("RANTAI_SMOKE_DEEP_LINK")
         .ok()
         .filter(|v| !v.is_empty())
 }
 
-/// Kalau ini menyala, aplikasi dijalankan dengan RANTAI_OPENCODE yang sengaja
-/// menunjuk ketiadaan, dan antarmuka wajib membuktikan pesannya benar.
-pub fn mesin_absen_diharapkan() -> bool {
-    std::env::var("RANTAI_SMOKE_MESIN_ABSEN").is_ok_and(|v| v == "1")
-}
-
-fn sinyal_diminta() -> Vec<&'static str> {
-    let mut sinyal = SINYAL_INTI.to_vec();
-    if mesin_absen_diharapkan() {
-        sinyal.push(SINYAL_MESIN_ABSEN);
-    }
-    if tautan_diharapkan().is_some() {
-        sinyal.push(SINYAL_TAUTAN);
-    }
-    if uji_simpan().is_some() {
-        sinyal.push(SINYAL_SIMPAN);
-    }
-    sinyal
-}
-
-/// Diberitahukan ke antarmuka supaya ia tahu pemeriksaan mana yang harus
-/// dijalankan. Tanpa ini, antarmuka harus menebak — dan menebak di jalur gagal
-/// adalah persis cara tes menjadi cacat tanpa disadari.
-#[derive(Debug, Clone, Serialize, specta::Type)]
+#[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct HarapanSmoke {
-    pub aktif: bool,
-    pub mesin_absen: bool,
-    /// Kalau terisi, antarmuka wajib membuktikan grant inilah yang sampai
-    /// lewat tautan dalam.
-    pub tautan: Option<String>,
-    /// Kalau terisi, antarmuka wajib menulis atau membaca data bertanda ini.
-    pub simpan: Option<UjiSimpan>,
+pub struct PersistenceCheck {
+    /// "write" on the first run, "read" on the second.
+    pub mode: String,
+    /// The same marker on both runs, so what is looked for is exactly what was
+    /// written.
+    pub marker: String,
+}
+
+fn persistence_check() -> Option<PersistenceCheck> {
+    let mode = std::env::var("RANTAI_SMOKE_PERSIST").ok()?;
+    if mode != "write" && mode != "read" {
+        return None;
+    }
+    let marker = std::env::var("RANTAI_SMOKE_PERSIST_MARKER").ok()?;
+    if marker.is_empty() {
+        return None;
+    }
+    Some(PersistenceCheck { mode, marker })
+}
+
+fn required_signals() -> Vec<&'static str> {
+    let mut signals = CORE_SIGNALS.to_vec();
+    if expects_engine_absent() {
+        signals.push(SIGNAL_ENGINE_ABSENT);
+    }
+    if expected_deep_link().is_some() {
+        signals.push(SIGNAL_DEEP_LINK);
+    }
+    if persistence_check().is_some() {
+        signals.push(SIGNAL_PERSISTENCE);
+    }
+    signals
+}
+
+/// Told to the interface so it knows which checks to run. Without this the
+/// interface would have to guess — and guessing on a failure path is exactly how
+/// a test becomes flawed without anyone noticing.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SmokeExpectations {
+    pub enabled: bool,
+    pub engine_absent: bool,
+    /// When set, the interface must prove this grant is the one that arrived by
+    /// deep link.
+    pub deep_link: Option<String>,
+    /// When set, the interface must write or read data under this marker.
+    pub persistence: Option<PersistenceCheck>,
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn harapan_smoke() -> HarapanSmoke {
-    HarapanSmoke {
-        aktif: aktif(),
-        mesin_absen: mesin_absen_diharapkan(),
-        tautan: tautan_diharapkan(),
-        simpan: uji_simpan(),
+pub fn smoke_expectations() -> SmokeExpectations {
+    SmokeExpectations {
+        enabled: enabled(),
+        engine_absent: expects_engine_absent(),
+        deep_link: expected_deep_link(),
+        persistence: persistence_check(),
     }
 }
 
-const BATAS_BAWAAN_MS: u64 = 120_000;
-
-/// Tempat sinyal dikumpulkan. Di luar mode smoke ia hanya terisi dan diabaikan;
-/// biayanya nol, dan keberadaannya membuat jalur yang diuji CI persis sama
-/// dengan jalur yang dipakai sehari-hari.
+/// Where signals are collected. Outside smoke mode it merely fills up and is
+/// ignored; it costs nothing, and its presence keeps the path CI exercises
+/// identical to the one used every day.
 #[derive(Default)]
-pub struct Papan {
-    terlihat: Mutex<Vec<String>>,
-    berubah: Condvar,
+pub struct Board {
+    seen: Mutex<Vec<String>>,
+    changed: Condvar,
 }
 
-impl Papan {
-    fn catat(&self, nama: &str) {
-        let mut terlihat = self.terlihat.lock().expect("papan sinyal teracuni");
-        if !terlihat.iter().any(|s| s == nama) {
-            terlihat.push(nama.to_string());
+impl Board {
+    fn record(&self, name: &str) {
+        let mut seen = self.seen.lock().expect("signal board poisoned");
+        if !seen.iter().any(|s| s == name) {
+            seen.push(name.to_string());
         }
-        self.berubah.notify_all();
+        self.changed.notify_all();
     }
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn lapor_sinyal(nama: String, papan: State<'_, Papan>) -> Result<(), String> {
-    if !sinyal_diminta().contains(&nama.as_str()) {
-        return Err(format!("sinyal tak dikenal: {nama}"));
+pub fn report_signal(name: String, board: State<'_, Board>) -> Result<(), String> {
+    if !required_signals().contains(&name.as_str()) {
+        return Err(format!("unknown signal: {name}"));
     }
-    papan.catat(&nama);
+    board.record(&name);
     Ok(())
 }
 
 #[derive(Serialize, Type)]
-struct Laporan {
-    lulus: bool,
-    diminta: Vec<&'static str>,
-    diterima: Vec<String>,
-    hilang: Vec<&'static str>,
-    detik: f64,
+struct Report {
+    passed: bool,
+    required: Vec<&'static str>,
+    received: Vec<String>,
+    missing: Vec<&'static str>,
+    seconds: f64,
     platform: &'static str,
-    arsitektur: &'static str,
+    arch: &'static str,
 }
 
-pub fn aktif() -> bool {
+pub fn enabled() -> bool {
     std::env::var("RANTAI_SMOKE").is_ok_and(|v| v == "1")
 }
 
-fn batas() -> Duration {
+fn timeout() -> Duration {
     let ms = std::env::var("RANTAI_SMOKE_TIMEOUT_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(BATAS_BAWAAN_MS);
+        .unwrap_or(DEFAULT_TIMEOUT_MS);
     Duration::from_millis(ms)
 }
 
-fn tujuan_laporan() -> PathBuf {
+fn report_path() -> PathBuf {
     std::env::var("RANTAI_SMOKE_REPORT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir().join("rantai-smoke.json"))
 }
 
-/// Mematikan mesin sebelum proses berakhir. Dipanggil di tiap jalan keluar
-/// pengawas — lulus maupun gagal.
-fn matikan_mesin_dulu(handle: &tauri::AppHandle) {
-    let mesin = handle.state::<crate::mesin::Mesin>();
-    if let Err(e) = tauri::async_runtime::block_on(mesin.matikan()) {
-        eprintln!("smoke: gagal mematikan mesin saat keluar: {e}");
+/// Stops the engine before the process ends. Called on every exit path the
+/// watchdog takes — passing and failing alike.
+fn stop_engine_first(handle: &tauri::AppHandle) {
+    let engine = handle.state::<crate::engine::Engine>();
+    if let Err(e) = tauri::async_runtime::block_on(engine.stop()) {
+        eprintln!("smoke: could not stop the engine on exit: {e}");
     }
 }
 
-pub fn awasi(handle: tauri::AppHandle) {
-    let batas = batas();
-    let tujuan = tujuan_laporan();
+pub fn watch(handle: tauri::AppHandle) {
+    let timeout = timeout();
+    let destination = report_path();
 
     std::thread::spawn(move || {
-        let papan = handle.state::<Papan>();
-        let mulai = Instant::now();
+        let board = handle.state::<Board>();
+        let started = Instant::now();
 
-        let diminta = sinyal_diminta();
-        let mut terlihat = papan.terlihat.lock().expect("papan sinyal teracuni");
-        while !diminta.iter().all(|s| terlihat.iter().any(|t| t == s)) {
-            let sisa = match batas.checked_sub(mulai.elapsed()) {
-                Some(sisa) if !sisa.is_zero() => sisa,
+        let required = required_signals();
+        let mut seen = board.seen.lock().expect("signal board poisoned");
+        while !required.iter().all(|s| seen.iter().any(|t| t == s)) {
+            let left = match timeout.checked_sub(started.elapsed()) {
+                Some(left) if !left.is_zero() => left,
                 _ => break,
             };
-            let (berikutnya, _) = papan
-                .berubah
-                .wait_timeout(terlihat, sisa)
-                .expect("papan sinyal teracuni");
-            terlihat = berikutnya;
+            let (next, _) = board
+                .changed
+                .wait_timeout(seen, left)
+                .expect("signal board poisoned");
+            seen = next;
         }
-        let diterima: Vec<String> = terlihat.clone();
-        drop(terlihat);
+        let received: Vec<String> = seen.clone();
+        drop(seen);
 
-        let hilang: Vec<&'static str> = diminta
+        let missing: Vec<&'static str> = required
             .iter()
             .copied()
-            .filter(|s| !diterima.iter().any(|t| t == s))
+            .filter(|s| !received.iter().any(|t| t == s))
             .collect();
 
-        let laporan = Laporan {
-            lulus: hilang.is_empty(),
-            diminta: diminta.clone(),
-            diterima,
-            hilang: hilang.clone(),
-            detik: mulai.elapsed().as_secs_f64(),
+        let report = Report {
+            passed: missing.is_empty(),
+            required: required.clone(),
+            received,
+            missing: missing.clone(),
+            seconds: started.elapsed().as_secs_f64(),
             platform: std::env::consts::OS,
-            arsitektur: std::env::consts::ARCH,
+            arch: std::env::consts::ARCH,
         };
 
-        let teks = serde_json::to_string_pretty(&laporan)
-            .unwrap_or_else(|e| format!("{{\"galat\":\"gagal menulis laporan: {e}\"}}"));
+        let text = serde_json::to_string_pretty(&report)
+            .unwrap_or_else(|e| format!("{{\"error\":\"could not write the report: {e}\"}}"));
 
-        if let Some(induk) = tujuan.parent() {
-            if let Err(e) = std::fs::create_dir_all(induk) {
-                eprintln!("smoke: gagal membuat {}: {e}", induk.display());
+        if let Some(parent) = destination.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("smoke: could not create {}: {e}", parent.display());
             }
         }
-        if let Err(e) = std::fs::write(&tujuan, &teks) {
-            eprintln!("smoke: gagal menulis {}: {e}", tujuan.display());
+        if let Err(e) = std::fs::write(&destination, &text) {
+            eprintln!("smoke: could not write {}: {e}", destination.display());
         }
 
-        // std::process::exit tidak menjalankan destructor, jadi `kill_on_drop`
-        // pada proses anak tidak pernah menyala. Tanpa baris ini, tiap kali
-        // mode smoke keluar ia meninggalkan OpenCode hidup dan dipungut init —
-        // yang ditemukan dengan mendaftar proses sesudah percobaan, bukan
-        // dengan membaca kode.
-        matikan_mesin_dulu(&handle);
+        // std::process::exit does not run destructors, so `kill_on_drop` on the
+        // child process never fires. Without this line, every exit from smoke
+        // mode leaves OpenCode alive and adopted by init — found by listing
+        // processes after a run, not by reading the code.
+        stop_engine_first(&handle);
 
-        if laporan.lulus {
+        if report.passed {
             eprintln!(
-                "smoke: lulus — semua sinyal tiba dalam {:.1}s",
-                laporan.detik
+                "smoke: passed — every signal arrived within {:.1}s",
+                report.seconds
             );
             std::process::exit(0);
         }
 
-        // Sebutkan apa yang tidak pernah tiba, bukan hanya bahwa sesuatu gagal.
+        // Name what never arrived, not merely that something failed.
         eprintln!(
-            "smoke: gagal setelah {:.1}s — sinyal yang tidak pernah tiba: {}",
-            laporan.detik,
-            hilang.join(", ")
+            "smoke: failed after {:.1}s — signals that never arrived: {}",
+            report.seconds,
+            missing.join(", ")
         );
-        eprintln!("{teks}");
+        eprintln!("{text}");
         std::process::exit(1);
     });
 }
