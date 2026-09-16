@@ -18,7 +18,49 @@ use tauri::{Manager, State};
 ///   1. `webview-termuat` — halaman termuat, bundel jalan, React ter-mount
 ///   2. `ipc-bulat`       — jawaban Rust sampai ke layar lalu kembali ke Rust
 ///   3. `data-bulat`      — data ditulis ke SQLite lalu dibaca kembali utuh
-const SINYAL: [&str; 3] = ["webview-termuat", "ipc-bulat", "data-bulat"];
+const SINYAL_INTI: [&str; 3] = ["webview-termuat", "ipc-bulat", "data-bulat"];
+
+/// Sinyal keempat, hanya diminta kalau CI memang menjalankan aplikasi tanpa
+/// binary mesin. Gerbang Fase 2 menuntutnya secara eksplisit: jalankan tanpa
+/// binary mesin, dan pastikan pesannya benar.
+///
+/// Ia dipisahkan karena OpenCode 176 MB dan tidak ikut di dalam repo. Menguji
+/// *ketiadaannya* justru tidak butuh unduhan apa pun — jadi bagian gerbang ini
+/// bisa berjalan di tiap putaran CI, di ketiga platform, dengan harga nol.
+const SINYAL_MESIN_ABSEN: &str = "mesin-absen-benar";
+
+/// Kalau ini menyala, aplikasi dijalankan dengan RANTAI_OPENCODE yang sengaja
+/// menunjuk ketiadaan, dan antarmuka wajib membuktikan pesannya benar.
+pub fn mesin_absen_diharapkan() -> bool {
+    std::env::var("RANTAI_SMOKE_MESIN_ABSEN").is_ok_and(|v| v == "1")
+}
+
+fn sinyal_diminta() -> Vec<&'static str> {
+    let mut sinyal = SINYAL_INTI.to_vec();
+    if mesin_absen_diharapkan() {
+        sinyal.push(SINYAL_MESIN_ABSEN);
+    }
+    sinyal
+}
+
+/// Diberitahukan ke antarmuka supaya ia tahu pemeriksaan mana yang harus
+/// dijalankan. Tanpa ini, antarmuka harus menebak — dan menebak di jalur gagal
+/// adalah persis cara tes menjadi cacat tanpa disadari.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HarapanSmoke {
+    pub aktif: bool,
+    pub mesin_absen: bool,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn harapan_smoke() -> HarapanSmoke {
+    HarapanSmoke {
+        aktif: aktif(),
+        mesin_absen: mesin_absen_diharapkan(),
+    }
+}
 
 const BATAS_BAWAAN_MS: u64 = 120_000;
 
@@ -44,7 +86,7 @@ impl Papan {
 #[tauri::command]
 #[specta::specta]
 pub fn lapor_sinyal(nama: String, papan: State<'_, Papan>) -> Result<(), String> {
-    if !SINYAL.contains(&nama.as_str()) {
+    if !sinyal_diminta().contains(&nama.as_str()) {
         return Err(format!("sinyal tak dikenal: {nama}"));
     }
     papan.catat(&nama);
@@ -80,6 +122,15 @@ fn tujuan_laporan() -> PathBuf {
         .unwrap_or_else(|_| std::env::temp_dir().join("rantai-smoke.json"))
 }
 
+/// Mematikan mesin sebelum proses berakhir. Dipanggil di tiap jalan keluar
+/// pengawas — lulus maupun gagal.
+fn matikan_mesin_dulu(handle: &tauri::AppHandle) {
+    let mesin = handle.state::<crate::mesin::Mesin>();
+    if let Err(e) = tauri::async_runtime::block_on(mesin.matikan()) {
+        eprintln!("smoke: gagal mematikan mesin saat keluar: {e}");
+    }
+}
+
 pub fn awasi(handle: tauri::AppHandle) {
     let batas = batas();
     let tujuan = tujuan_laporan();
@@ -88,8 +139,9 @@ pub fn awasi(handle: tauri::AppHandle) {
         let papan = handle.state::<Papan>();
         let mulai = Instant::now();
 
+        let diminta = sinyal_diminta();
         let mut terlihat = papan.terlihat.lock().expect("papan sinyal teracuni");
-        while !SINYAL.iter().all(|s| terlihat.iter().any(|t| t == s)) {
+        while !diminta.iter().all(|s| terlihat.iter().any(|t| t == s)) {
             let sisa = match batas.checked_sub(mulai.elapsed()) {
                 Some(sisa) if !sisa.is_zero() => sisa,
                 _ => break,
@@ -103,7 +155,7 @@ pub fn awasi(handle: tauri::AppHandle) {
         let diterima: Vec<String> = terlihat.clone();
         drop(terlihat);
 
-        let hilang: Vec<&'static str> = SINYAL
+        let hilang: Vec<&'static str> = diminta
             .iter()
             .copied()
             .filter(|s| !diterima.iter().any(|t| t == s))
@@ -111,7 +163,7 @@ pub fn awasi(handle: tauri::AppHandle) {
 
         let laporan = Laporan {
             lulus: hilang.is_empty(),
-            diminta: SINYAL.to_vec(),
+            diminta: diminta.clone(),
             diterima,
             hilang: hilang.clone(),
             detik: mulai.elapsed().as_secs_f64(),
@@ -130,6 +182,13 @@ pub fn awasi(handle: tauri::AppHandle) {
         if let Err(e) = std::fs::write(&tujuan, &teks) {
             eprintln!("smoke: gagal menulis {}: {e}", tujuan.display());
         }
+
+        // std::process::exit tidak menjalankan destructor, jadi `kill_on_drop`
+        // pada proses anak tidak pernah menyala. Tanpa baris ini, tiap kali
+        // mode smoke keluar ia meninggalkan OpenCode hidup dan dipungut init —
+        // yang ditemukan dengan mendaftar proses sesudah percobaan, bukan
+        // dengan membaca kode.
+        matikan_mesin_dulu(&handle);
 
         if laporan.lulus {
             eprintln!(

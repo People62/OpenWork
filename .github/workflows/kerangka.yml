@@ -160,6 +160,57 @@ jobs:
             "${binary}"
           fi
 
+      # Gerbang Fase 2 menuntut jalur gagal mesin diuji: jalankan tanpa binary
+      # mesin, dan pastikan pesannya benar. OpenCode 176 MB dan tidak ikut di
+      # dalam repo — tapi menguji *ketiadaannya* justru tidak butuh unduhan apa
+      # pun, jadi bagian gerbang ini berjalan di tiap putaran, di ketiga
+      # platform, dengan harga nol.
+      #
+      # RANTAI_OPENCODE menunjuk ketiadaan, dan antarmuka menuntut pesannya
+      # menyebut penyebabnya. Kalau mesin justru menyala — karena runner
+      # kebetulan punya OpenCode — antarmuka menggagalkan smoke alih-alih
+      # diam-diam lolos. Pengujian yang tidak menguasai masukannya sudah pernah
+      # membuat tiga percobaan reproduksi di Rantai sia-sia.
+      - name: Jalankan pemeriksaan tanpa binary mesin
+        shell: bash
+        env:
+          RANTAI_SMOKE: "1"
+          RANTAI_SMOKE_MESIN_ABSEN: "1"
+          RANTAI_SMOKE_TIMEOUT_MS: "120000"
+        run: |
+          set -euo pipefail
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-mesin.json"
+          case "${RUNNER_OS}" in
+            Windows) export RANTAI_OPENCODE='C:\jalan\yang\sengaja\tidak\ada\opencode.exe' ;;
+            *)       export RANTAI_OPENCODE=/jalan/yang/sengaja/tidak/ada/opencode ;;
+          esac
+
+          case "${RUNNER_OS}" in
+            Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
+            macOS)   binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai" ;;
+            *)       binary=apps/desktop/src-tauri/target/release/rantai ;;
+          esac
+
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            xvfb-run -a "${binary}"
+          else
+            "${binary}"
+          fi
+
+      # Gerbang Fase 2 juga menuntut tidak ada proses yatim. Kalau langkah di
+      # atas meninggalkan OpenCode hidup, ia akan terlihat di sini.
+      - name: Pastikan tidak ada mesin yang tertinggal
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if pgrep -x opencode > /dev/null 2>&1; then
+            echo "ada proses opencode yang tertinggal:"
+            pgrep -ax opencode
+            exit 1
+          fi
+          echo "tidak ada proses mesin yang tertinggal"
+
       # Laporannya menyebut sinyal mana yang tiba, jadi kegagalan mengatakan apa
       # yang rusak — bukan hanya bahwa sesuatu rusak.
       - name: Laporan

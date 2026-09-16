@@ -7,14 +7,18 @@
 // Perintah dan tipenya sendiri tidak ditulis di sini: semuanya datang dari
 // `bindings.ts`, yang dihasilkan dari Rust dan tidak boleh disunting tangan.
 
-export { commands } from "./bindings";
+export { commands, events } from "./bindings";
 export type {
   Galat,
+  GalatMesin,
+  Kepingan,
   Peran,
   PeriksaDb,
   Pesan,
   Sapaan,
+  Selesai,
   Sesi,
+  StatusMesin,
   Workspace,
 } from "./bindings";
 
