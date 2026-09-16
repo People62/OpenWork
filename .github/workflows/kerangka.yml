@@ -1,0 +1,225 @@
+# Gerbang Fase 0: installer terbangun dan jendelanya *terbuka* di Windows,
+# macOS, dan Linux — di CI, bukan hanya di VM pengembangan.
+#
+# Tauri memakai webview bawaan sistem, jadi "lintas platform" berarti tiga mesin
+# render, bukan satu: WebKitGTK di Linux, WKWebView di macOS, WebView2 di
+# Windows. Perbedaan di antara ketiganya tidak pernah muncul saat typecheck. Ini
+# hal termurah dikerjakan di commit pertama dan termahal ditunda.
+#
+# Pemeriksaannya bukan tangkapan layar. Aplikasi dijalankan sungguhan dalam mode
+# smoke dan menunggu dua sinyal yang berurutan — yang kedua tidak mungkin tiba
+# kalau yang pertama tidak:
+#
+#   1. webview-termuat — halaman termuat, bundel jalan, React ter-mount
+#   2. ipc-bulat       — jawaban Rust sampai ke layar lalu kembali ke Rust
+#
+# Keduanya tiba: keluar 0. Lewat batas waktu: keluar 1, menyebutkan sinyal mana
+# yang tidak pernah datang.
+
+name: Kerangka · tiga platform
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BUN_VERSION: "1.4.0"
+
+jobs:
+  kerangka:
+    name: ${{ matrix.webview }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            webview: WebKitGTK (Linux)
+          - os: macos-14
+            webview: WKWebView (macOS)
+          - os: windows-latest
+            webview: WebView2 (Windows)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Siapkan Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Siapkan Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Simpan cache build Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      # WebKitGTK dan header pengembangannya tidak ada di runner Ubuntu, dan
+      # Xvfb satu-satunya tampilan yang ia punya. macOS dan Windows sudah
+      # membawa webview-nya sendiri.
+      - name: Pasang webview dan tampilan Linux
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xvfb
+
+      - name: Pasang dependensi
+        run: bun install --frozen-lockfile
+
+      - name: Bangun antarmuka
+        working-directory: apps/ui
+        run: bun run build
+
+      # Langkah CI yang hijau belum tentu mengerjakan sesuatu. Langkah di atas
+      # bisa lulus sambil tidak menghasilkan apa pun, dan `tauri build`
+      # berikutnya akan diam-diam memakai keluaran lama.
+      - name: Pastikan antarmuka benar-benar ter-export
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f apps/ui/out/index.html \
+            || { echo "apps/ui/out/index.html tidak ada — next build tidak menghasilkan apa pun"; exit 1; }
+          echo "out/ berisi $(find apps/ui/out -type f | wc -l) berkas"
+
+      - name: Bangun installer
+        working-directory: apps/desktop
+        run: bun run tauri build
+
+      - name: Sebutkan installer yang terbangun
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle=apps/desktop/src-tauri/target/release/bundle
+          test -d "${bundle}" || { echo "tidak ada direktori bundle — tidak ada installer yang terbangun"; exit 1; }
+          echo "### ${{ matrix.webview }} · installer" >> "${GITHUB_STEP_SUMMARY}"
+          echo '```' >> "${GITHUB_STEP_SUMMARY}"
+          find "${bundle}" -maxdepth 2 -type f \
+            \( -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) \
+            -exec ls -lh {} \; | tee -a "${GITHUB_STEP_SUMMARY}"
+          echo '```' >> "${GITHUB_STEP_SUMMARY}"
+
+      # Binary yang diuji harus yang dihasilkan langkah `tauri build` di atas.
+      # Yang menentukan bukan profil debug atau release: `cargo build --release`
+      # biasa tetap menghasilkan konteks dev, dan aplikasinya akan memuat devUrl
+      # alih-alih hasil export yang tertanam. Jangan pernah menyelipkan
+      # `cargo build` di antara kedua langkah ini — itu menimpa binary yang benar
+      # dengan yang salah, dan kegagalannya tampak seperti webview yang mati.
+      - name: Jalankan pemeriksaan webview
+        shell: bash
+        env:
+          RANTAI_SMOKE: "1"
+          RANTAI_SMOKE_TIMEOUT_MS: "120000"
+        run: |
+          set -euo pipefail
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke.json"
+          echo "RANTAI_SMOKE_REPORT=${RANTAI_SMOKE_REPORT}" >> "${GITHUB_ENV}"
+
+          case "${RUNNER_OS}" in
+            Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
+            macOS)   binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai" ;;
+            *)       binary=apps/desktop/src-tauri/target/release/rantai ;;
+          esac
+          test -x "${binary}" || { echo "binary tidak ada di ${binary}"; exit 1; }
+
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            xvfb-run -a "${binary}"
+          else
+            "${binary}"
+          fi
+
+      # Laporannya menyebut sinyal mana yang tiba, jadi kegagalan mengatakan apa
+      # yang rusak — bukan hanya bahwa sesuatu rusak.
+      - name: Laporan
+        if: always()
+        shell: bash
+        run: |
+          laporan="${RANTAI_SMOKE_REPORT:-${RUNNER_TEMP}/rantai-smoke.json}"
+          echo "### ${{ matrix.webview }} · sinyal" >> "${GITHUB_STEP_SUMMARY}"
+          if [ -f "${laporan}" ]; then
+            echo '```json' >> "${GITHUB_STEP_SUMMARY}"
+            cat "${laporan}" >> "${GITHUB_STEP_SUMMARY}"
+            echo '```' >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo 'Aplikasi tidak pernah menulis laporan — ia gagal sebelum sampai ke sana.' >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Unggah installer
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          if-no-files-found: warn
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/**/*.deb
+            apps/desktop/src-tauri/target/release/bundle/**/*.AppImage
+            apps/desktop/src-tauri/target/release/bundle/**/*.dmg
+            apps/desktop/src-tauri/target/release/bundle/**/*.exe
+            apps/desktop/src-tauri/target/release/bundle/**/*.msi
+
+  # Murah, cepat, dan menangkap kelas galat yang berbeda dari matriks di atas.
+  periksa:
+    name: Typecheck dan lint
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Siapkan Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Siapkan Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Simpan cache build Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Pasang webview Linux
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            librsvg2-dev
+
+      - name: Pasang dependensi
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck antarmuka
+        working-directory: apps/ui
+        run: bun run typecheck
+
+      - name: Format Rust
+        working-directory: apps/desktop/src-tauri
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: apps/desktop/src-tauri
+        run: cargo clippy --all-targets -- -D warnings

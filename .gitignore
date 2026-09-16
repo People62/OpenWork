@@ -1,0 +1,12 @@
+node_modules/
+.next/
+out/
+target/
+*.tsbuildinfo
+.DS_Store
+*.local
+
+# Dihasilkan ulang setiap `tauri build`, dan isinya berbeda per platform —
+# di Linux ada linux-schema.json, di Windows ada windows-schema.json. Melacaknya
+# hanya menghasilkan perubahan palsu setiap kali build dijalankan di OS lain.
+apps/desktop/src-tauri/gen/schemas/

@@ -1,0 +1,14 @@
+{
+  "name": "@rantai/desktop",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "tauri dev",
+    "build:ui": "cd ../ui && bun run build",
+    "build": "bun run build:ui && tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
