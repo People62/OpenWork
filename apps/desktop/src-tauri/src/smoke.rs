@@ -38,6 +38,35 @@ const SINYAL_MESIN_ABSEN: &str = "mesin-absen-benar";
 /// ia diuji di sini alih-alih ditemukan rusak nanti.
 const SINYAL_TAUTAN: &str = "tautan-diterima";
 
+/// Sinyal keenam. Rilis 1 menuntut percakapan "tersimpan di SQLite dan bisa
+/// dibuka kembali" — dan itu hanya bisa dibuktikan dengan menjalankan aplikasi
+/// dua kali: sekali menulis, sekali membaca sesudah prosesnya benar-benar mati.
+///
+/// Tes dalam satu proses tidak membuktikannya. Ia bisa lulus sepenuhnya dari
+/// cache di memori tanpa satu byte pun pernah menyentuh disk.
+const SINYAL_SIMPAN: &str = "data-bertahan";
+
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct UjiSimpan {
+    /// "tulis" pada jalannya yang pertama, "baca" pada yang kedua.
+    pub mode: String,
+    /// Penanda yang sama di kedua jalan, supaya yang dicari persis yang ditulis.
+    pub tanda: String,
+}
+
+fn uji_simpan() -> Option<UjiSimpan> {
+    let mode = std::env::var("RANTAI_SMOKE_SIMPAN").ok()?;
+    if mode != "tulis" && mode != "baca" {
+        return None;
+    }
+    let tanda = std::env::var("RANTAI_SMOKE_SIMPAN_TANDA").ok()?;
+    if tanda.is_empty() {
+        return None;
+    }
+    Some(UjiSimpan { mode, tanda })
+}
+
 /// Grant yang seharusnya sampai lewat tautan dalam, kalau CI memintanya.
 pub fn tautan_diharapkan() -> Option<String> {
     std::env::var("RANTAI_SMOKE_TAUTAN")
@@ -59,6 +88,9 @@ fn sinyal_diminta() -> Vec<&'static str> {
     if tautan_diharapkan().is_some() {
         sinyal.push(SINYAL_TAUTAN);
     }
+    if uji_simpan().is_some() {
+        sinyal.push(SINYAL_SIMPAN);
+    }
     sinyal
 }
 
@@ -73,6 +105,8 @@ pub struct HarapanSmoke {
     /// Kalau terisi, antarmuka wajib membuktikan grant inilah yang sampai
     /// lewat tautan dalam.
     pub tautan: Option<String>,
+    /// Kalau terisi, antarmuka wajib menulis atau membaca data bertanda ini.
+    pub simpan: Option<UjiSimpan>,
 }
 
 #[tauri::command]
@@ -82,6 +116,7 @@ pub fn harapan_smoke() -> HarapanSmoke {
         aktif: aktif(),
         mesin_absen: mesin_absen_diharapkan(),
         tautan: tautan_diharapkan(),
+        simpan: uji_simpan(),
     }
 }
 

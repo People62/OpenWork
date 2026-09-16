@@ -15,6 +15,7 @@ tercakup di Rantai.
 apps/ui                    Next.js, App Router, output: 'export'
   app/bindings.ts          Dihasilkan dari Rust — jangan disunting tangan
   app/den/                 Alur masuk Den: pengurai tautan dan layarnya
+  app/ruang/               Workspace, sesi, dan percakapan tersimpan
 apps/desktop/src-tauri     Program Rust — cangkang Tauri sekaligus BE lokal
   src/domain.rs            Workspace, sesi, pesan
   src/db.rs                Koneksi SQLite dan migrasinya
@@ -80,6 +81,7 @@ yang pertama tidak:
 | `data-bulat` | SQLite ditulis lalu dibaca kembali utuh |
 | `mesin-absen-benar` | Ketiadaan binary mesin menghasilkan pesan yang benar |
 | `tautan-diterima` | `openwork://den-auth` sampai ke layar dengan grant yang benar |
+| `data-bertahan` | Data ditulis, aplikasi ditutup, lalu dibaca kembali utuh |
 
 ```bash
 RANTAI_SMOKE=1 \
@@ -132,6 +134,16 @@ di dua jalan keluar yang pasti dilewati — `RunEvent::Exit` milik Tauri, dan
 pengawas mode smoke. Ini ditemukan dengan mendaftar proses sesudah percobaan,
 bukan dengan membaca kode: versi pertamanya meninggalkan OpenCode hidup dan
 dipungut `init`.
+
+## Tersimpan dan bisa dibuka kembali
+
+Rilis 1 menjanjikan percakapan "tersimpan di SQLite dan bisa dibuka kembali".
+Itu hanya terbukti dengan menjalankan aplikasi **dua kali**: sekali menulis,
+sekali membaca sesudah prosesnya benar-benar mati. Tes dalam satu proses bisa
+lulus sepenuhnya dari cache di memori tanpa satu byte pun menyentuh disk.
+
+CI melakukan persis itu di ketiga platform, dan tanda yang tidak pernah ditulis
+sudah dibuktikan benar-benar menggagalkannya.
 
 ## Alur masuk Den
 

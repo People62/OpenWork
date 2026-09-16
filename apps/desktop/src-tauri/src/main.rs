@@ -94,6 +94,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(smoke::Papan::default())
         .manage(mesin::Mesin::default())
         .manage(percakapan::Percakapan::default())

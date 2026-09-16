@@ -160,6 +160,59 @@ jobs:
             "${binary}"
           fi
 
+      # Rilis 1 menjanjikan percakapan "tersimpan di SQLite dan bisa dibuka
+      # kembali". Itu hanya terbukti dengan menjalankan aplikasi dua kali:
+      # sekali menulis, sekali membaca sesudah prosesnya benar-benar mati.
+      #
+      # Tes dalam satu proses tidak membuktikannya — ia bisa lulus sepenuhnya
+      # dari cache di memori tanpa satu byte pun menyentuh disk.
+      - name: Tulis data yang harus bertahan
+        shell: bash
+        env:
+          RANTAI_SMOKE: "1"
+          RANTAI_SMOKE_SIMPAN: "tulis"
+          RANTAI_SMOKE_TIMEOUT_MS: "120000"
+        run: |
+          set -euo pipefail
+          tanda="bertahan-${GITHUB_RUN_ID}-${RUNNER_OS}"
+          echo "RANTAI_SMOKE_SIMPAN_TANDA=${tanda}" >> "${GITHUB_ENV}"
+          export RANTAI_SMOKE_SIMPAN_TANDA="${tanda}"
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-tulis.json"
+
+          case "${RUNNER_OS}" in
+            Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
+            macOS)   binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai" ;;
+            *)       binary=apps/desktop/src-tauri/target/release/rantai ;;
+          esac
+
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            xvfb-run -a "${binary}"
+          else
+            "${binary}"
+          fi
+
+      - name: Baca kembali sesudah aplikasi ditutup
+        shell: bash
+        env:
+          RANTAI_SMOKE: "1"
+          RANTAI_SMOKE_SIMPAN: "baca"
+          RANTAI_SMOKE_TIMEOUT_MS: "120000"
+        run: |
+          set -euo pipefail
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-baca.json"
+
+          case "${RUNNER_OS}" in
+            Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
+            macOS)   binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai" ;;
+            *)       binary=apps/desktop/src-tauri/target/release/rantai ;;
+          esac
+
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            xvfb-run -a "${binary}"
+          else
+            "${binary}"
+          fi
+
       # Alur masuk Den digarap paling awal di Fase 3 dengan sengaja, dan inilah
       # bagiannya yang paling tidak pasti: registrasi skema URL berperilaku
       # berbeda tiap OS, paling rapuh di mode pengembangan, dan **di Rantai

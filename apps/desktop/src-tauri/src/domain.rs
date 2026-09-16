@@ -21,6 +21,12 @@ pub type Milidetik = i64;
 /// batas itu, dan baru menyentuhnya pada tahun 287396. Jadi tiap medan waktu
 /// menyatakan sendiri bahwa ia aman sebagai `number` — bukan lewat saklar global
 /// yang diam-diam ikut melonggarkan i64 lain yang kelak ditambahkan.
+///
+/// Dinyatakan `specta_typescript::Number`, bukan `f64`. Keduanya menjadi
+/// `number` di TypeScript, tapi `f64` menjadi `number | null` — karena JSON
+/// mengubah NaN dan Infinity jadi `null`, dan specta benar memperhitungkannya.
+/// Cap waktu tidak pernah NaN, jadi `| null` itu memaksa tiap pemakai menangani
+/// hal yang tidak mungkin terjadi. Kebohongan ke arah itu sama merugikannya.
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -30,7 +36,7 @@ pub struct Workspace {
     /// Folder sungguhan di disk. Inilah yang membuat workspace bukan sekadar
     /// baris basis data.
     pub jalur: String,
-    #[specta(type = f64)]
+    #[specta(type = specta_typescript::Number)]
     pub dibuat_pada: Milidetik,
 }
 
@@ -40,9 +46,9 @@ pub struct Sesi {
     pub id: String,
     pub workspace_id: String,
     pub judul: String,
-    #[specta(type = f64)]
+    #[specta(type = specta_typescript::Number)]
     pub dibuat_pada: Milidetik,
-    #[specta(type = f64)]
+    #[specta(type = specta_typescript::Number)]
     pub diperbarui_pada: Milidetik,
 }
 
@@ -77,6 +83,6 @@ pub struct Pesan {
     pub sesi_id: String,
     pub peran: Peran,
     pub isi: String,
-    #[specta(type = f64)]
+    #[specta(type = specta_typescript::Number)]
     pub dibuat_pada: Milidetik,
 }

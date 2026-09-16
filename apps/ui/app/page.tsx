@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { PanelDen } from "./den/panel";
 import { uraiTautanMasuk } from "./den/tautan";
 import { PanelMesin } from "./mesin";
+import { PanelRuang } from "./ruang/panel";
 import { buka, commands, diDalamTauri, type PeriksaDb, type Sapaan } from "./tauri";
 
 // Tiga sinyal yang menutup gerbang, dan urutannya berarti: yang berikutnya tidak
@@ -15,6 +16,7 @@ const SINYAL = [
   "data-bulat",
   "mesin-absen-benar",
   "tautan-diterima",
+  "data-bertahan",
 ] as const;
 type Sinyal = (typeof SINYAL)[number];
 
@@ -85,6 +87,17 @@ export default function Beranda() {
           tandai("tautan-diterima");
         }
 
+        // Sinyal 6 — Rilis 1 menuntut percakapan tersimpan dan bisa dibuka
+        // kembali. Itu hanya terbukti dengan dua kali menjalankan aplikasi:
+        // sekali menulis, sekali membaca sesudah prosesnya benar-benar mati.
+        if (harapan.simpan) {
+          await buktikanDataBertahan(harapan.simpan.mode, harapan.simpan.tanda);
+          if (batal) return;
+          await buka(commands.laporSinyal("data-bertahan"));
+          if (batal) return;
+          tandai("data-bertahan");
+        }
+
         if (harapan.mesinAbsen) {
           await buktikanMesinAbsen();
           if (batal) return;
@@ -111,10 +124,9 @@ export default function Beranda() {
         <p className="label">Fase 3 · antarmuka dipindahkan</p>
         <h1>Rantai</h1>
         <p className="lede">
-          Tampilannya belum digarap — itu Fase 3. Yang dibuktikan di sini
-          alirannya: Next.js ter-export statis termuat di jendela Tauri, IPC ke
-          Rust bulat dua arah, SQLite ditulis lalu dibaca kembali utuh, dan
-          OpenCode dinyalakan, dialirkan, serta dihentikan dari Rust.
+          Tulang punggung Rilis 1: membuka workspace, membuat sesi di dalamnya,
+          dan membuka kembali percakapan yang tersimpan. Panel di bawahnya masih
+          perkakas pembuktian, bukan tampilan akhir.
         </p>
       </header>
 
@@ -171,6 +183,8 @@ export default function Beranda() {
         </div>
       )}
 
+      {tauri && <PanelRuang />}
+
       {tauri && <PanelDen />}
 
       {tauri && <PanelMesin dirKerja={dirKerja} />}
@@ -194,6 +208,47 @@ export default function Beranda() {
       )}
     </main>
   );
+}
+
+/// Menulis data bertanda, atau membacanya kembali dan menuntut ia utuh.
+///
+/// Dijalankan pada dua proses yang berbeda. Tes dalam satu proses bisa lulus
+/// sepenuhnya dari cache di memori tanpa satu byte pun menyentuh disk — dan
+/// "bisa dibuka kembali setelah aplikasi ditutup" adalah persis yang dijanjikan
+/// Rilis 1.
+async function buktikanDataBertahan(mode: string, tanda: string): Promise<void> {
+  const isiPesan = `isi-${tanda}`;
+
+  if (mode === "tulis") {
+    const ws = await buka(commands.buatWorkspace(tanda, `/smoke/${tanda}`));
+    const sesi = await buka(commands.buatSesi(ws.id, tanda));
+    await buka(commands.tambahPesan(sesi.id, "pengguna", isiPesan));
+    return;
+  }
+
+  const ws = (await buka(commands.daftarWorkspace())).find((w) => w.nama === tanda);
+  if (!ws) {
+    throw new Error(
+      `workspace bertanda ${tanda} tidak ada sesudah aplikasi dijalankan ulang — ` +
+        "data tidak bertahan",
+    );
+  }
+
+  const sesi = (await buka(commands.daftarSesi(ws.id))).find((s) => s.judul === tanda);
+  if (!sesi) {
+    throw new Error(`workspace bertahan tapi sesinya hilang: ${tanda}`);
+  }
+
+  const pesan = await buka(commands.daftarPesan(sesi.id));
+  const cocok = pesan.find((p) => p.isi === isiPesan);
+  if (!cocok) {
+    throw new Error(
+      `sesi bertahan tapi pesannya hilang; yang ada: ${pesan.map((p) => p.isi).join(", ") || "(kosong)"}`,
+    );
+  }
+  if (cocok.peran !== "pengguna") {
+    throw new Error(`peran pesan berubah jadi ${cocok.peran}`);
+  }
 }
 
 /// Membuktikan tautan dalam benar-benar sampai ke antarmuka, berikut grant yang
