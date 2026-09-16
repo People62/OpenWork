@@ -18,14 +18,29 @@
 
 name: Kerangka · tiga platform
 
+# `push` sengaja dibatasi ke main saja. Sebelumnya ia mencakup semua cabang
+# sekaligus `pull_request`, dan akibatnya tiap PR membangun Rust enam kali
+# bukan tiga: satu putaran untuk push ke cabangnya, satu lagi untuk PR-nya.
+# Keduanya menguji commit yang sama dan melaporkan nama cek yang sama, jadi
+# keduanya muncul sebagai "Required" di kotak merge dan waktu tunggunya
+# berlipat tanpa menambah satu pun informasi.
+#
+# Konsekuensinya: cabang yang di-push tanpa PR tidak diperiksa. Itu disengaja —
+# gerbangnya adalah merge ke main, dan tiap merge ke main lewat PR.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# Push beruntun ke PR yang sama tidak perlu diselesaikan semuanya; hanya commit
+# terakhir yang akan di-merge.
+concurrency:
+  group: kerangka-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   BUN_VERSION: "1.4.0"
