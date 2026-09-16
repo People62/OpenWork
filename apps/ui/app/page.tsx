@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { PanelDen } from "./den/panel";
+import { uraiTautanMasuk } from "./den/tautan";
 import { PanelMesin } from "./mesin";
 import { buka, commands, diDalamTauri, type PeriksaDb, type Sapaan } from "./tauri";
 
@@ -12,6 +14,7 @@ const SINYAL = [
   "ipc-bulat",
   "data-bulat",
   "mesin-absen-benar",
+  "tautan-diterima",
 ] as const;
 type Sinyal = (typeof SINYAL)[number];
 
@@ -70,6 +73,18 @@ export default function Beranda() {
         // pesannya harus menyebut penyebabnya, bukan gejala pembersihannya.
         const harapan = await commands.harapanSmoke();
         if (batal) return;
+
+        // Sinyal 5 — hanya diminta kalau CI meluncurkan aplikasi dengan tautan
+        // dalam. Registrasi skema URL tidak pernah diuji CI di Rantai sama
+        // sekali; ini bagian dengan ketidakpastian tertinggi di alur masuk.
+        if (harapan.tautan) {
+          await buktikanTautanSampai(harapan.tautan);
+          if (batal) return;
+          await buka(commands.laporSinyal("tautan-diterima"));
+          if (batal) return;
+          tandai("tautan-diterima");
+        }
+
         if (harapan.mesinAbsen) {
           await buktikanMesinAbsen();
           if (batal) return;
@@ -93,7 +108,7 @@ export default function Beranda() {
   return (
     <main>
       <header>
-        <p className="label">Fase 2 · OpenCode dikelola dari Rust</p>
+        <p className="label">Fase 3 · antarmuka dipindahkan</p>
         <h1>Rantai</h1>
         <p className="lede">
           Tampilannya belum digarap — itu Fase 3. Yang dibuktikan di sini
@@ -156,6 +171,8 @@ export default function Beranda() {
         </div>
       )}
 
+      {tauri && <PanelDen />}
+
       {tauri && <PanelMesin dirKerja={dirKerja} />}
 
       {sapaan && (
@@ -177,6 +194,34 @@ export default function Beranda() {
       )}
     </main>
   );
+}
+
+/// Membuktikan tautan dalam benar-benar sampai ke antarmuka, berikut grant yang
+/// benar.
+///
+/// Ia membaca tautan peluncuran, bukan menunggu peristiwa: tautan yang
+/// *meluncurkan* aplikasi tiba sebelum halaman ini ada. Versi pertama kode ini
+/// kehilangannya sepenuhnya; versi kedua mengurasnya dan berebut dengan panel
+/// Den. Keduanya ketahuan dengan menjalankan, bukan dengan membaca.
+async function buktikanTautanSampai(grantDiharapkan: string): Promise<void> {
+  const urls = await commands.tautanPeluncuran();
+
+  if (urls.length === 0) {
+    throw new Error(
+      "tidak ada tautan dalam yang sampai — sistem tidak menyerahkannya, " +
+        "atau ia hilang sebelum antarmuka siap",
+    );
+  }
+
+  const terurai = urls.map(uraiTautanMasuk).find((t) => t !== null);
+  if (!terurai) {
+    throw new Error(`tautan sampai tapi tidak terurai: ${urls.join(", ")}`);
+  }
+  if (terurai.grant !== grantDiharapkan) {
+    throw new Error(
+      `grant yang sampai berbeda: ${terurai.grant} bukan ${grantDiharapkan}`,
+    );
+  }
 }
 
 /// Menyalakan mesin ketika binary-nya sengaja tidak ada, dan menuntut pesannya

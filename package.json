@@ -12,6 +12,7 @@
     "typecheck": "cd apps/ui && bun run typecheck",
     "rust:fmt": "cd apps/desktop/src-tauri && cargo fmt --check",
     "rust:lint": "cd apps/desktop/src-tauri && cargo clippy --all-targets -- -D warnings",
-    "rust:test": "cd apps/desktop/src-tauri && cargo test"
+    "rust:test": "cd apps/desktop/src-tauri && cargo test",
+    "test": "cd apps/ui && bun test"
   }
 }

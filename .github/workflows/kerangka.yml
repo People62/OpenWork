@@ -160,6 +160,59 @@ jobs:
             "${binary}"
           fi
 
+      # Alur masuk Den digarap paling awal di Fase 3 dengan sengaja, dan inilah
+      # bagiannya yang paling tidak pasti: registrasi skema URL berperilaku
+      # berbeda tiap OS, paling rapuh di mode pengembangan, dan **di Rantai
+      # tidak pernah tercakup uji CI sama sekali** — tiga sinyal hijau di sana
+      # hanya menguji webview, React, bridge, dan IPC.
+      #
+      # Di Linux dan Windows, sistem menyerahkan tautan lewat argumen baris
+      # perintah, jadi ia bisa diuji langsung. Aplikasi diluncurkan dengan
+      # tautan, dan antarmuka menuntut grant yang benar sampai ke layar —
+      # tautan yang tidak sampai, atau sampai dengan grant lain, menggagalkan
+      # langkah ini.
+      - name: Jalankan pemeriksaan tautan masuk Den
+        if: runner.os != 'macOS'
+        shell: bash
+        env:
+          RANTAI_SMOKE: "1"
+          RANTAI_SMOKE_TAUTAN: "GRANTUJICOBACI1234567890"
+          RANTAI_SMOKE_TIMEOUT_MS: "120000"
+        run: |
+          set -euo pipefail
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-tautan.json"
+          tautan="openwork://den-auth?grant=${RANTAI_SMOKE_TAUTAN}"
+
+          case "${RUNNER_OS}" in
+            Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
+            *)       binary=apps/desktop/src-tauri/target/release/rantai ;;
+          esac
+
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            xvfb-run -a "${binary}" "${tautan}"
+          else
+            "${binary}" "${tautan}"
+          fi
+
+      # macOS menyerahkan deep link lewat Apple Events, bukan argumen baris
+      # perintah, jadi cara di atas belum tentu berlaku di sana. Dijalankan
+      # sebagai penyelidikan yang tidak memblokir: hasilnya memberi tahu apakah
+      # jalurnya sama, tanpa menahan rilis atas sesuatu yang memang belum
+      # diketahui. Kalau ia hijau berkali-kali, `continue-on-error` dilepas.
+      - name: Selidiki tautan masuk di macOS (tidak memblokir)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        shell: bash
+        env:
+          RANTAI_SMOKE: "1"
+          RANTAI_SMOKE_TAUTAN: "GRANTUJICOBACI1234567890"
+          RANTAI_SMOKE_TIMEOUT_MS: "60000"
+        run: |
+          set -euo pipefail
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-tautan.json"
+          binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai"
+          "${binary}" "openwork://den-auth?grant=${RANTAI_SMOKE_TAUTAN}"
+
       # Gerbang Fase 2 menuntut jalur gagal mesin diuji: jalankan tanpa binary
       # mesin, dan pastikan pesannya benar. OpenCode 176 MB dan tidak ikut di
       # dalam repo — tapi menguji *ketiadaannya* justru tidak butuh unduhan apa
@@ -317,3 +370,11 @@ jobs:
       - name: Typecheck antarmuka
         working-directory: apps/ui
         run: bun run typecheck
+
+      # Tes antarmuka. Pengurai tautan masuk Den diuji di sini — bagian alur
+      # masuk yang bisa diuji tanpa jendela, tanpa Tauri, dan tanpa Den.
+      # Menyempitkan yang tidak terujikan sekecil mungkin adalah seluruh
+      # strategi Fase 3; yang tersisa hanya dua sentuhan native.
+      - name: Tes antarmuka
+        working-directory: apps/ui
+        run: bun test

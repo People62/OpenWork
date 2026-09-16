@@ -29,6 +29,22 @@ const SINYAL_INTI: [&str; 3] = ["webview-termuat", "ipc-bulat", "data-bulat"];
 /// bisa berjalan di tiap putaran CI, di ketiga platform, dengan harga nol.
 const SINYAL_MESIN_ABSEN: &str = "mesin-absen-benar";
 
+/// Sinyal kelima, diminta kalau aplikasi diluncurkan dengan tautan dalam dan
+/// CI menyebutkan grant apa yang seharusnya sampai.
+///
+/// Registrasi skema URL tidak pernah tercakup uji CI di Rantai sama sekali —
+/// tiga sinyal yang hijau di sana hanya menguji webview, React, bridge, dan
+/// IPC. Ini bagian dengan ketidakpastian tertinggi di seluruh alur masuk, jadi
+/// ia diuji di sini alih-alih ditemukan rusak nanti.
+const SINYAL_TAUTAN: &str = "tautan-diterima";
+
+/// Grant yang seharusnya sampai lewat tautan dalam, kalau CI memintanya.
+pub fn tautan_diharapkan() -> Option<String> {
+    std::env::var("RANTAI_SMOKE_TAUTAN")
+        .ok()
+        .filter(|v| !v.is_empty())
+}
+
 /// Kalau ini menyala, aplikasi dijalankan dengan RANTAI_OPENCODE yang sengaja
 /// menunjuk ketiadaan, dan antarmuka wajib membuktikan pesannya benar.
 pub fn mesin_absen_diharapkan() -> bool {
@@ -39,6 +55,9 @@ fn sinyal_diminta() -> Vec<&'static str> {
     let mut sinyal = SINYAL_INTI.to_vec();
     if mesin_absen_diharapkan() {
         sinyal.push(SINYAL_MESIN_ABSEN);
+    }
+    if tautan_diharapkan().is_some() {
+        sinyal.push(SINYAL_TAUTAN);
     }
     sinyal
 }
@@ -51,6 +70,9 @@ fn sinyal_diminta() -> Vec<&'static str> {
 pub struct HarapanSmoke {
     pub aktif: bool,
     pub mesin_absen: bool,
+    /// Kalau terisi, antarmuka wajib membuktikan grant inilah yang sampai
+    /// lewat tautan dalam.
+    pub tautan: Option<String>,
 }
 
 #[tauri::command]
@@ -59,6 +81,7 @@ pub fn harapan_smoke() -> HarapanSmoke {
     HarapanSmoke {
         aktif: aktif(),
         mesin_absen: mesin_absen_diharapkan(),
+        tautan: tautan_diharapkan(),
     }
 }
 

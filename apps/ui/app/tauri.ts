@@ -19,6 +19,8 @@ export type {
   Selesai,
   Sesi,
   StatusMesin,
+  StatusTautan,
+  TautanDalam,
   Workspace,
 } from "./bindings";
 

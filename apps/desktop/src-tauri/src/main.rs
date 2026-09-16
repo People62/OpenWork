@@ -21,6 +21,7 @@ mod mesin;
 mod percakapan;
 mod perintah;
 mod smoke;
+mod tautan;
 
 use serde::Serialize;
 use specta::Type;
@@ -74,18 +75,29 @@ fn pembangun() -> Builder<tauri::Wry> {
             percakapan::buat_sesi_mesin,
             percakapan::kirim_prompt,
             percakapan::hentikan_percakapan,
+            tautan::status_tautan_dalam,
+            tautan::daftarkan_tautan_dalam,
+            tautan::buka_di_browser,
+            tautan::tautan_peluncuran,
         ])
         // Peristiwa ikut dihasilkan ke bindings.ts, lengkap dengan pendengarnya.
-        .events(collect_events![mesin::klien::Kepingan, percakapan::Selesai])
+        .events(collect_events![
+            mesin::klien::Kepingan,
+            percakapan::Selesai,
+            tautan::TautanDalam
+        ])
 }
 
 fn main() {
     let pembangun = pembangun();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(smoke::Papan::default())
         .manage(mesin::Mesin::default())
         .manage(percakapan::Percakapan::default())
+        .manage(tautan::Peluncuran::default())
         .invoke_handler(pembangun.invoke_handler())
         // Kalau sinyal tidak pernah tiba, pertanyaan pertamanya selalu sama:
         // apakah halamannya termuat, dan dari alamat mana. Tanpa jejak ini,
@@ -102,6 +114,7 @@ fn main() {
         })
         .setup(move |app| {
             pembangun.mount_events(app);
+            tautan::pasang(app.handle());
 
             let dir_data = app
                 .path()
