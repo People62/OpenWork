@@ -6,6 +6,7 @@ import {
   commands,
   events,
   type Kepingan,
+  type Model,
   type Selesai,
   type StatusMesin,
 } from "./tauri";
@@ -20,6 +21,8 @@ export function PanelMesin({ dirKerja }: { dirKerja: string }) {
   const [sibuk, setSibuk] = useState<string | null>(null);
   const [galat, setGalat] = useState<string | null>(null);
   const [sesiMesinId, setSesiMesinId] = useState<string | null>(null);
+  const [model, setModel] = useState<Model[]>([]);
+  const [modelDipilih, setModelDipilih] = useState<string>("");
   const [teks, setTeks] = useState("");
   const [mengalir, setMengalir] = useState(false);
   const [kepingan, setKepingan] = useState<Kepingan[]>([]);
@@ -69,6 +72,15 @@ export function PanelMesin({ dirKerja }: { dirKerja: string }) {
   const nyalakan = () =>
     jalankan("menyalakan", async () => {
       setStatus(await buka(commands.nyalakanMesin(dirKerja)));
+      // Model ditanyakan ke mesin, tidak pernah ditebak: ketersediaan provider
+      // bergantung pada direktori kerja mesin. Folder yang sama bisa punya
+      // puluhan model atau nol, tergantung apakah OpenCode mengenalinya sebagai
+      // proyek.
+      const daftar = await buka(commands.daftarModel());
+      setModel(daftar);
+      setModelDipilih((sekarang) =>
+        sekarang || (daftar[0] ? `${daftar[0].providerID}/${daftar[0].id}` : ""),
+      );
     });
 
   const matikan = () =>
@@ -79,7 +91,15 @@ export function PanelMesin({ dirKerja }: { dirKerja: string }) {
 
   const buatSesi = () =>
     jalankan("membuat sesi", async () => {
-      setSesiMesinId(await buka(commands.buatSesiMesin()));
+      const [providerId, ...sisa] = modelDipilih.split("/");
+      const id = sisa.join("/");
+      if (!providerId || !id) {
+        throw new Error("pilih model lebih dulu");
+      }
+      // Model ditetapkan pada sesinya, bukan pada prompt. Skema prompt tidak
+      // punya medan model, dan sesi tanpa model jatuh ke bawaan mesin — yang
+      // kegagalannya tidak muncul di aliran peristiwa sama sekali.
+      setSesiMesinId(await buka(commands.buatSesiMesin({ providerID: providerId, id })));
       setKepingan([]);
       setSelesai(null);
     });
@@ -140,10 +160,43 @@ export function PanelMesin({ dirKerja }: { dirKerja: string }) {
         <button onClick={matikan} disabled={!!sibuk || !status?.menyala}>
           Matikan
         </button>
-        <button onClick={buatSesi} disabled={!!sibuk || !status?.menyala}>
+        <button
+          onClick={buatSesi}
+          disabled={!!sibuk || !status?.menyala || !modelDipilih}
+        >
           Sesi baru
         </button>
       </div>
+
+      {status?.menyala && (
+        <>
+          <p className="label" style={{ marginTop: 16 }}>
+            Model ({model.length} tersedia)
+          </p>
+          {model.length === 0 ? (
+            <p className="ruang-kosong">
+              Mesin tidak melihat satu pun model di folder ini. Ketersediaan
+              provider bergantung pada direktori kerja — pastikan folder yang
+              dibuka dikenali OpenCode sebagai proyek, dan kredensial provider
+              tersedia di lingkungannya.
+            </p>
+          ) : (
+            <select
+              value={modelDipilih}
+              onChange={(e) => setModelDipilih(e.target.value)}
+            >
+              {model.map((m) => {
+                const nilai = `${m.providerID}/${m.id}`;
+                return (
+                  <option key={nilai} value={nilai}>
+                    {nilai}
+                  </option>
+                );
+              })}
+            </select>
+          )}
+        </>
+      )}
 
       {sesiMesinId && (
         <>

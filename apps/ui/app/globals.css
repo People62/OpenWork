@@ -264,3 +264,16 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px;
 @media (max-width: 720px) {
   .ruang { grid-template-columns: 1fr; }
 }
+
+select {
+  margin-top: 8px;
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--sunk);
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: 8px 10px;
+}
+select:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }

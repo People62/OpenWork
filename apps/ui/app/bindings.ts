@@ -34,7 +34,26 @@ export const commands = {
 	statusMesin: () => typedError<StatusMesin, GalatMesin>(__TAURI_INVOKE("status_mesin")),
 	nyalakanMesin: (dirKerja: string) => typedError<StatusMesin, GalatMesin>(__TAURI_INVOKE("nyalakan_mesin", { dirKerja })),
 	matikanMesin: () => typedError<StatusMesin, GalatMesin>(__TAURI_INVOKE("matikan_mesin")),
-	buatSesiMesin: () => typedError<string, GalatMesin>(__TAURI_INVOKE("buat_sesi_mesin")),
+	/**
+	 *  Model yang benar-benar tersedia di mesin yang sedang menyala.
+	 * 
+	 *  Wajib ditanyakan, bukan ditebak: ketersediaan provider bergantung pada
+	 *  direktori kerja mesin. Folder yang sama bisa punya puluhan model atau nol,
+	 *  tergantung apakah ia dikenali sebagai proyek oleh OpenCode.
+	 */
+	daftarModel: () => typedError<Model[], GalatMesin>(__TAURI_INVOKE("daftar_model")),
+	/**
+	 *  Membuat sesi mesin dengan model yang ditetapkan padanya.
+	 * 
+	 *  Model tidak boleh dikosongkan begitu saja di pemakaian sungguhan: sesi tanpa
+	 *  model jatuh ke bawaan mesin, dan kalau bawaan itu tidak bisa dipakai,
+	 *  kegagalannya tidak muncul di aliran peristiwa sama sekali — hanya di log
+	 *  mesin. Antarmuka akan tampak menggantung tanpa sebab.
+	 */
+	buatSesiMesin: (model: {
+	providerID: string,
+	id: string,
+} | null) => typedError<string, GalatMesin>(__TAURI_INVOKE("buat_sesi_mesin", { model })),
 	/**
 	 *  Mengirim prompt lalu mengalirkan jawabannya sebagai peristiwa. Perintah ini
 	 *  kembali segera; alirannya berjalan di latar sampai selesai atau dihentikan.
@@ -116,7 +135,11 @@ export type HarapanSmoke = {
  *  dua kali" tetap berlaku untuk peristiwa, bukan hanya untuk perintah.
  */
 export type Kepingan = {
-	sesiMesinId: string,
+	/**
+	 *  Kosong untuk peristiwa yang bukan milik sesi mana pun — aliran global
+	 *  juga membawa `plugin.added`, `catalog.updated`, dan sejenisnya.
+	 */
+	sesiMesinId: string | null,
 	/**
 	 *  Nama peristiwa apa adanya dari mesin. Tidak diterjemahkan di sini —
 	 *  menerjemahkannya berarti menebak, dan bentuk peristiwa OpenCode berubah
@@ -133,6 +156,18 @@ export type Kepingan = {
 	 *  menyempitkannya sendiri di tempat ia benar-benar dipakai.
 	 */
 	muatan: unknown,
+};
+
+/**
+ *  Model yang benar-benar tersedia, ditanyakan ke mesin.
+ * 
+ *  Wajib ditanyakan, bukan ditebak: ketersediaan provider bergantung pada
+ *  direktori kerja mesin. Folder yang sama bisa punya 31 model atau nol,
+ *  tergantung apakah ia dikenali sebagai proyek.
+ */
+export type Model = {
+	providerID: string,
+	id: string,
 };
 
 export type Peran = "pengguna" | "asisten";

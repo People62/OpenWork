@@ -13,7 +13,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri_specta::Event;
 use tokio::sync::Mutex;
 
-use crate::mesin::klien::{Kepingan, Klien};
+use crate::mesin::klien::{Kepingan, Klien, Model};
 use crate::mesin::{GalatMesin, Mesin, StatusMesin};
 
 /// Ditandai saat aliran berhenti — selesai sendiri, dibatalkan, atau gagal.
@@ -56,11 +56,32 @@ pub async fn matikan_mesin(mesin: State<'_, Mesin>) -> Result<StatusMesin, Galat
     Ok(mesin.status().await)
 }
 
+/// Model yang benar-benar tersedia di mesin yang sedang menyala.
+///
+/// Wajib ditanyakan, bukan ditebak: ketersediaan provider bergantung pada
+/// direktori kerja mesin. Folder yang sama bisa punya puluhan model atau nol,
+/// tergantung apakah ia dikenali sebagai proyek oleh OpenCode.
 #[tauri::command]
 #[specta::specta]
-pub async fn buat_sesi_mesin(mesin: State<'_, Mesin>) -> Result<String, GalatMesin> {
+pub async fn daftar_model(mesin: State<'_, Mesin>) -> Result<Vec<Model>, GalatMesin> {
     let klien = Klien::baru(mesin.alamat().await?);
-    Ok(klien.buat_sesi().await?.id)
+    Ok(klien.daftar_model().await?)
+}
+
+/// Membuat sesi mesin dengan model yang ditetapkan padanya.
+///
+/// Model tidak boleh dikosongkan begitu saja di pemakaian sungguhan: sesi tanpa
+/// model jatuh ke bawaan mesin, dan kalau bawaan itu tidak bisa dipakai,
+/// kegagalannya tidak muncul di aliran peristiwa sama sekali — hanya di log
+/// mesin. Antarmuka akan tampak menggantung tanpa sebab.
+#[tauri::command]
+#[specta::specta]
+pub async fn buat_sesi_mesin(
+    model: Option<Model>,
+    mesin: State<'_, Mesin>,
+) -> Result<String, GalatMesin> {
+    let klien = Klien::baru(mesin.alamat().await?);
+    Ok(klien.buat_sesi(model.as_ref()).await?.id)
 }
 
 /// Mengirim prompt lalu mengalirkan jawabannya sebagai peristiwa. Perintah ini
