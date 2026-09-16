@@ -581,22 +581,27 @@ mod tes_percakapan {
             "aliran tidak berhenti dalam 30 detik sesudah dihentikan"
         );
 
-        let kumpulan = terkumpul.lock().expect("kumpulan teracuni");
+        // Kunci dilepas sebelum `await` berikutnya. MutexGuard sinkron yang
+        // dipegang melewati titik await bisa membuat runtime terkunci — clippy
+        // menangkapnya, dan ia benar.
+        let (jumlah, jenis, semua_milik_sesi) = {
+            let kumpulan = terkumpul.lock().expect("kumpulan teracuni");
+            (
+                kumpulan.len(),
+                kumpulan
+                    .iter()
+                    .map(|k| k.jenis.clone())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                kumpulan
+                    .iter()
+                    .all(|k| k.sesi_mesin_id.as_deref() == Some(sesi.id.as_str())),
+            )
+        };
         assert!(
-            kumpulan
-                .iter()
-                .all(|k| k.sesi_mesin_id.as_deref() == Some(sesi.id.as_str())),
+            semua_milik_sesi,
             "ada peristiwa milik sesi lain yang lolos saringan"
         );
-        eprintln!(
-            "percakapan: {} peristiwa, jenis: {:?}",
-            kumpulan.len(),
-            kumpulan
-                .iter()
-                .map(|k| k.jenis.as_str())
-                .collect::<std::collections::BTreeSet<_>>()
-        );
-        drop(kumpulan);
+        eprintln!("percakapan: {jumlah} peristiwa, jenis: {jenis:?}");
 
         let pid = mesin.hidup.lock().await.as_ref().and_then(|h| h.anak.id());
         mesin.matikan().await.expect("mematikan gagal");
