@@ -17,13 +17,15 @@
 mod db;
 mod domain;
 mod galat;
+mod mesin;
+mod percakapan;
 mod perintah;
 mod smoke;
 
 use serde::Serialize;
 use specta::Type;
 use tauri::Manager;
-use tauri_specta::{collect_commands, Builder};
+use tauri_specta::{collect_commands, collect_events, Builder};
 
 #[derive(Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -54,17 +56,27 @@ fn halo(nama: String) -> Sapaan {
 /// keduanya membaca daftar yang sama, tipe di layar tidak bisa melenceng dari
 /// tipe di Rust tanpa ada yang gagal.
 fn pembangun() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![
-        halo,
-        smoke::lapor_sinyal,
-        perintah::buat_workspace,
-        perintah::daftar_workspace,
-        perintah::buat_sesi,
-        perintah::daftar_sesi,
-        perintah::tambah_pesan,
-        perintah::daftar_pesan,
-        perintah::periksa_basis_data,
-    ])
+    Builder::<tauri::Wry>::new()
+        .commands(collect_commands![
+            halo,
+            smoke::lapor_sinyal,
+            smoke::harapan_smoke,
+            perintah::buat_workspace,
+            perintah::daftar_workspace,
+            perintah::buat_sesi,
+            perintah::daftar_sesi,
+            perintah::tambah_pesan,
+            perintah::daftar_pesan,
+            perintah::periksa_basis_data,
+            percakapan::status_mesin,
+            percakapan::nyalakan_mesin,
+            percakapan::matikan_mesin,
+            percakapan::buat_sesi_mesin,
+            percakapan::kirim_prompt,
+            percakapan::hentikan_percakapan,
+        ])
+        // Peristiwa ikut dihasilkan ke bindings.ts, lengkap dengan pendengarnya.
+        .events(collect_events![mesin::klien::Kepingan, percakapan::Selesai])
 }
 
 fn main() {
@@ -72,6 +84,8 @@ fn main() {
 
     tauri::Builder::default()
         .manage(smoke::Papan::default())
+        .manage(mesin::Mesin::default())
+        .manage(percakapan::Percakapan::default())
         .invoke_handler(pembangun.invoke_handler())
         // Kalau sinyal tidak pernah tiba, pertanyaan pertamanya selalu sama:
         // apakah halamannya termuat, dan dari alamat mana. Tanpa jejak ini,
@@ -115,8 +129,21 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("gagal menjalankan aplikasi Tauri");
+        .build(tauri::generate_context!())
+        .expect("gagal membangun aplikasi Tauri")
+        // Menutup jendela tidak otomatis mematikan proses anak: `kill_on_drop`
+        // hanya berlaku pada jalur drop yang normal, dan tidak semua jalan
+        // keluar melewatinya. Gerbang Fase 2 menuntut tidak ada proses yatim,
+        // jadi pematiannya dilakukan di sini, di jalan keluar yang pasti
+        // dilewati.
+        .run(|handle, peristiwa| {
+            if matches!(peristiwa, tauri::RunEvent::Exit) {
+                let mesin = handle.state::<mesin::Mesin>();
+                if let Err(e) = tauri::async_runtime::block_on(mesin.matikan()) {
+                    eprintln!("gagal mematikan mesin saat keluar: {e}");
+                }
+            }
+        });
 }
 
 #[cfg(test)]

@@ -4,10 +4,10 @@ Aplikasi desktop dengan pendekatan OpenWork, tapi sisi kliennya diganti: **BE
 lokal Rust di dalam Tauri, antarmuka Next.js, bun sebagai perkakas**. Den (server
 pusat) dan OpenCode (mesin agen) dipertahankan apa adanya.
 
-Keadaan saat ini: **Fase 1 — data dan domain di Rust.** Belum ada percakapan,
-dan itu disengaja. Yang sudah berdiri adalah fondasinya: SQLite berikut
-migrasinya, model domain inti, dan tipe TypeScript yang *dihasilkan* dari Rust
-sehingga tidak bisa melenceng diam-diam.
+Keadaan saat ini: **Fase 2 — OpenCode dikelola dari Rust.** Mesin dinyalakan,
+diawasi, dan dimatikan dari dalam proses Tauri; bagian `@opencode-ai/sdk` yang
+dipakai ditulis ulang terhadap HTTP API-nya; token mengalir ke layar sebagai
+peristiwa bertipe dan bisa dihentikan di tengah.
 
 ## Susunan
 
@@ -19,6 +19,10 @@ apps/desktop/src-tauri     Program Rust — cangkang Tauri sekaligus BE lokal
   src/db.rs                Koneksi SQLite dan migrasinya
   src/perintah.rs          Perbatasan ke antarmuka — #[tauri::command]
   src/galat.rs             Satu tipe galat untuk seluruh perbatasan
+  src/mesin/temukan.rs     Mencari binary OpenCode, dan menyebut di mana saja sudah dicari
+  src/mesin/mod.rs         Menyalakan, mengawasi, mematikan proses mesin
+  src/mesin/klien.rs       Bagian SDK yang dipakai, ditulis ulang terhadap HTTP API
+  src/percakapan.rs        Streaming token sebagai peristiwa, dan penghentiannya
   src/smoke.rs             Mode pemeriksaan yang dipakai CI
 .github/workflows          Matriks tiga platform
 ```
@@ -71,6 +75,7 @@ yang pertama tidak:
 | `webview-termuat` | Halaman termuat, bundel jalan, React ter-mount |
 | `ipc-bulat` | Jawaban Rust sampai ke layar, lalu kembali lagi ke Rust |
 | `data-bulat` | SQLite ditulis lalu dibaca kembali utuh |
+| `mesin-absen-benar` | Ketiadaan binary mesin menghasilkan pesan yang benar |
 
 ```bash
 RANTAI_SMOKE=1 \
@@ -78,7 +83,7 @@ RANTAI_SMOKE_REPORT=/tmp/rantai-smoke.json \
 xvfb-run -a apps/desktop/src-tauri/target/release/rantai
 ```
 
-Ketiganya tiba: keluar 0. Lewat batas waktu (`RANTAI_SMOKE_TIMEOUT_MS`, bawaan
+Semuanya tiba: keluar 0. Lewat batas waktu (`RANTAI_SMOKE_TIMEOUT_MS`, bawaan
 120000): keluar 1, dan laporannya menyebut sinyal mana yang tidak pernah datang.
 
 **Pakai binary yang dihasilkan `tauri build`, bukan `cargo build`.** Yang
@@ -93,13 +98,44 @@ justru untuk itu: ia menyebut alamat yang dimuat, sehingga `http://localhost:300
 langsung membedakan "salah build" dari "benar-benar rusak". Yang benar terbaca
 `tauri://localhost`.
 
+## Mesin OpenCode
+
+Binary-nya tidak ikut di dalam repo — 176 MB, dan diunduh terpisah. Untuk
+menjalankannya dari sini, arahkan saja:
+
+```bash
+export RANTAI_OPENCODE=/jalur/ke/opencode
+bun run dev
+```
+
+Urutan pencariannya: timpaan `RANTAI_OPENCODE`, lalu sidecar di sebelah
+aplikasi, baru `PATH`. **PATH sengaja terakhir** supaya OpenCode yang kebetulan
+terpasang di mesin pengembang tidak pernah diam-diam menutupi sidecar yang tidak
+ikut terbawa ke dalam paket — kekeliruan itu sudah pernah membuat tiga percobaan
+reproduksi di Rantai sia-sia.
+
+Kalau binary-nya tidak ketemu, pesannya menyebut **tiap tempat yang sudah
+diperiksa**. Itu bukan kemewahan: di Rantai, binary mesin yang hilang
+menghasilkan pesan yang menyebut "SIGKILL" — gejala pembersihannya, bukan
+penyebabnya — dan tiga putaran CI habis mengejar hal yang salah. Ada tes yang
+secara khusus menuntut pesan itu **tidak** menyebut sinyal atau exit code.
+
+### Tidak ada proses yatim
+
+`kill_on_drop` saja tidak cukup: ia hanya berlaku pada jalur drop yang normal,
+dan `std::process::exit` tidak menjalankan destructor. Mesin karena itu dimatikan
+di dua jalan keluar yang pasti dilewati — `RunEvent::Exit` milik Tauri, dan
+pengawas mode smoke. Ini ditemukan dengan mendaftar proses sesudah percobaan,
+bukan dengan membaca kode: versi pertamanya meninggalkan OpenCode hidup dan
+dipungut `init`.
+
 ## Yang berikutnya
 
 | Fase | Isi | Gerbang |
 |---|---|---|
 | **0** ✅ | Kerangka, satu perintah, CI tiga platform | Installer terbangun dan jendelanya terbuka di CI |
 | **1** ✅ | SQLite dan migrasi; model domain; tipe TS *dihasilkan* dari Rust | Mengubah bentuk data di Rust memunculkan galat tipe di Next.js |
-| **2** | OpenCode dinyalakan/diawasi/dimatikan dari Rust; streaming token | Percakapan penuh bisa dihentikan tanpa proses yatim — termasuk saat binary mesinnya dihilangkan |
+| **2** ◐ | OpenCode dinyalakan/diawasi/dimatikan dari Rust; streaming token | Percakapan penuh bisa dihentikan tanpa proses yatim — termasuk saat binary mesinnya dihilangkan |
 | **3** | Antarmuka dipindahkan; alur masuk Den diuji lebih dulu | Dipakai sendiri untuk pekerjaan nyata selama seminggu |
 | **4** | Updater, deep link, penandatanganan, notarisasi | Installer terpasang lalu menerima pembaruan otomatis |
 

@@ -1,12 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { PanelMesin } from "./mesin";
 import { buka, commands, diDalamTauri, type PeriksaDb, type Sapaan } from "./tauri";
 
 // Tiga sinyal yang menutup gerbang, dan urutannya berarti: yang berikutnya tidak
 // mungkin tiba kalau yang sebelumnya tidak. Rust menunggu ketiganya saat
 // dijalankan dalam mode smoke di CI.
-const SINYAL = ["webview-termuat", "ipc-bulat", "data-bulat"] as const;
+const SINYAL = [
+  "webview-termuat",
+  "ipc-bulat",
+  "data-bulat",
+  "mesin-absen-benar",
+] as const;
 type Sinyal = (typeof SINYAL)[number];
 
 export default function Beranda() {
@@ -15,6 +21,9 @@ export default function Beranda() {
   const [terkirim, setTerkirim] = useState<Sinyal[]>([]);
   const [galat, setGalat] = useState<string | null>(null);
   const [tauri, setTauri] = useState(false);
+  // Workspace sungguhan menyusul di Fase 3; untuk sekarang mesin dijalankan di
+  // direktori kerja proses, yang cukup untuk membuktikan alirannya.
+  const dirKerja = ".";
 
   useEffect(() => {
     const ada = diDalamTauri();
@@ -55,6 +64,19 @@ export default function Beranda() {
         await buka(commands.laporSinyal("data-bulat"));
         if (batal) return;
         tandai("data-bulat");
+
+        // Sinyal 4 — hanya diminta kalau CI sengaja menjalankan aplikasi tanpa
+        // binary mesin. Gerbang Fase 2 menuntut jalur gagalnya diuji lebih dulu:
+        // pesannya harus menyebut penyebabnya, bukan gejala pembersihannya.
+        const harapan = await commands.harapanSmoke();
+        if (batal) return;
+        if (harapan.mesinAbsen) {
+          await buktikanMesinAbsen();
+          if (batal) return;
+          await buka(commands.laporSinyal("mesin-absen-benar"));
+          if (batal) return;
+          tandai("mesin-absen-benar");
+        }
       } catch (e) {
         if (batal) return;
         // Cetak seluruh rantainya, bukan hanya `message` — galat yang
@@ -71,12 +93,13 @@ export default function Beranda() {
   return (
     <main>
       <header>
-        <p className="label">Fase 1 · data dan domain di Rust</p>
+        <p className="label">Fase 2 · OpenCode dikelola dari Rust</p>
         <h1>Rantai</h1>
         <p className="lede">
-          Belum ada percakapan di sini. Halaman ini membuktikan tiga hal: Next.js
-          ter-export statis termuat di dalam jendela Tauri, IPC ke Rust bulat dua
-          arah, dan SQLite bisa ditulis lalu dibaca kembali utuh.
+          Tampilannya belum digarap — itu Fase 3. Yang dibuktikan di sini
+          alirannya: Next.js ter-export statis termuat di jendela Tauri, IPC ke
+          Rust bulat dua arah, SQLite ditulis lalu dibaca kembali utuh, dan
+          OpenCode dinyalakan, dialirkan, serta dihentikan dari Rust.
         </p>
       </header>
 
@@ -133,6 +156,8 @@ export default function Beranda() {
         </div>
       )}
 
+      {tauri && <PanelMesin dirKerja={dirKerja} />}
+
       {sapaan && (
         <div className="card">
           <p className="label">Jawaban dari Rust</p>
@@ -152,6 +177,41 @@ export default function Beranda() {
       )}
     </main>
   );
+}
+
+/// Menyalakan mesin ketika binary-nya sengaja tidak ada, dan menuntut pesannya
+/// benar. Kalau ia justru berhasil menyala, itu berarti pengujiannya cacat —
+/// aplikasi menemukan OpenCode lain — dan itu harus menggagalkan smoke, bukan
+/// diam-diam lolos.
+async function buktikanMesinAbsen(): Promise<void> {
+  const hasil = await commands.nyalakanMesin(".");
+
+  if (hasil.status === "ok") {
+    throw new Error(
+      "mesin justru menyala padahal binary-nya sengaja dihilangkan — " +
+        `ia menemukan ${hasil.data.jalurBinary} lewat ${hasil.data.sumber}. ` +
+        "Pengujiannya yang cacat, bukan aplikasinya.",
+    );
+  }
+
+  const pesan = hasil.error.pesan;
+
+  if (!pesan.includes("tidak ditemukan")) {
+    throw new Error(`pesan tidak menyebut inti persoalannya: ${pesan}`);
+  }
+  if (!pesan.includes("PATH")) {
+    throw new Error(`pesan tidak menyebut tempat yang sudah diperiksa: ${pesan}`);
+  }
+
+  // Yang paling mahal di Rantai: pesan yang berbicara tentang lapisan
+  // pembersihan sementara penyebabnya binary yang tidak ada.
+  for (const menyesatkan of ["SIGKILL", "signal", "exit code", "terminated"]) {
+    if (pesan.includes(menyesatkan)) {
+      throw new Error(
+        `pesan menyebut "${menyesatkan}" padahal penyebabnya binary yang tidak ada: ${pesan}`,
+      );
+    }
+  }
 }
 
 function rantaiGalat(e: unknown): string {
