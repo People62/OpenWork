@@ -212,10 +212,6 @@ jobs:
       - name: Pasang dependensi
         run: bun install --frozen-lockfile
 
-      - name: Typecheck antarmuka
-        working-directory: apps/ui
-        run: bun run typecheck
-
       - name: Format Rust
         working-directory: apps/desktop/src-tauri
         run: cargo fmt --check
@@ -223,3 +219,35 @@ jobs:
       - name: Clippy
         working-directory: apps/desktop/src-tauri
         run: cargo clippy --all-targets -- -D warnings
+
+      # Tes ini menulis ulang apps/ui/app/bindings.ts dari daftar perintah di
+      # Rust. Ia juga menjalankan migrasi SQLite terhadap basis data di memori,
+      # jadi SQL yang salah ketik gagal di sini, bukan saat aplikasi dibuka.
+      - name: Tes Rust
+        working-directory: apps/desktop/src-tauri
+        run: cargo test
+
+      # Gerbang Fase 1. Kalau langkah di atas mengubah bindings.ts, berarti
+      # bentuk data di Rust bergerak tanpa berkas itu ikut diperbarui — dan
+      # pemanggil di Next.js belum tentu menyusul. Diff yang tidak bersih di
+      # sini adalah satu-satunya penangkal terhadap dua definisi kebenaran yang
+      # perlahan berbeda tanpa ada yang menyadarinya.
+      - name: Pastikan bindings.ts mutakhir
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git diff --exit-code -- apps/ui/app/bindings.ts; then
+            echo
+            echo "bindings.ts tidak mutakhir terhadap perintah di Rust."
+            echo "Jalankan: cd apps/desktop/src-tauri && cargo test"
+            echo "lalu commit apps/ui/app/bindings.ts."
+            exit 1
+          fi
+          echo "bindings.ts mutakhir"
+
+      # Dijalankan setelah bindings dipastikan mutakhir — kalau tidak, typecheck
+      # bisa lulus terhadap berkas lama dan menyembunyikan justru hal yang
+      # gerbang ini jaga.
+      - name: Typecheck antarmuka
+        working-directory: apps/ui
+        run: bun run typecheck
