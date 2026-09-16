@@ -103,6 +103,8 @@ export type HarapanSmoke = {
 	 *  lewat tautan dalam.
 	 */
 	tautan: string | null,
+	/**  Kalau terisi, antarmuka wajib menulis atau membaca data bertanda ini. */
+	simpan: UjiSimpan | null,
 };
 
 /**
@@ -147,7 +149,7 @@ export type Pesan = {
 	sesiId: string,
 	peran: Peran,
 	isi: string,
-	dibuatPada: number | null,
+	dibuatPada: number,
 };
 
 export type Sapaan = {
@@ -169,8 +171,8 @@ export type Sesi = {
 	id: string,
 	workspaceId: string,
 	judul: string,
-	dibuatPada: number | null,
-	diperbaruiPada: number | null,
+	dibuatPada: number,
+	diperbaruiPada: number,
 };
 
 export type StatusMesin = {
@@ -208,6 +210,13 @@ export type TautanDalam = {
 	urls: string[],
 };
 
+export type UjiSimpan = {
+	/**  "tulis" pada jalannya yang pertama, "baca" pada yang kedua. */
+	mode: string,
+	/**  Penanda yang sama di kedua jalan, supaya yang dicari persis yang ditulis. */
+	tanda: string,
+};
+
 /**
  *  Specta menolak mengekspor i64 ke TypeScript karena `number` kehilangan
  *  presisi di atas 2^53, dan penolakan itu benar sebagai aturan umum. Milidetik
@@ -215,6 +224,12 @@ export type TautanDalam = {
  *  batas itu, dan baru menyentuhnya pada tahun 287396. Jadi tiap medan waktu
  *  menyatakan sendiri bahwa ia aman sebagai `number` — bukan lewat saklar global
  *  yang diam-diam ikut melonggarkan i64 lain yang kelak ditambahkan.
+ * 
+ *  Dinyatakan `specta_typescript::Number`, bukan `f64`. Keduanya menjadi
+ *  `number` di TypeScript, tapi `f64` menjadi `number | null` — karena JSON
+ *  mengubah NaN dan Infinity jadi `null`, dan specta benar memperhitungkannya.
+ *  Cap waktu tidak pernah NaN, jadi `| null` itu memaksa tiap pemakai menangani
+ *  hal yang tidak mungkin terjadi. Kebohongan ke arah itu sama merugikannya.
  */
 export type Workspace = {
 	id: string,
@@ -224,7 +239,7 @@ export type Workspace = {
 	 *  baris basis data.
 	 */
 	jalur: string,
-	dibuatPada: number | null,
+	dibuatPada: number,
 };
 
 /* Tauri Specta runtime */
