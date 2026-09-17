@@ -87,6 +87,24 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # The engine is ~176 MB and is not in the repository, so a clean checkout
+      # has none. It is fetched here and verified against the sha256 pinned in
+      # apps/desktop/opencode.json — a mismatch stops the build rather than
+      # shipping an archive nobody vouched for.
+      #
+      # Cached by version and target, because 176 MB per job adds up.
+      - name: Cache the OpenCode engine
+        id: engine-cache
+        uses: actions/cache@v4
+        with:
+          path: apps/desktop/src-tauri/binaries
+          key: opencode-${{ hashFiles('apps/desktop/opencode.json') }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Fetch the OpenCode engine
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        working-directory: apps/desktop
+        run: bun run sidecar
+
       - name: Build the interface
         working-directory: apps/ui
         run: bun run build
@@ -110,7 +128,8 @@ jobs:
         shell: bash
         env:
           RANTAI_SMOKE: "1"
-          RANTAI_SMOKE_TIMEOUT_MS: "120000"
+          RANTAI_SMOKE_ENGINE: "present"
+          RANTAI_SMOKE_TIMEOUT_MS: "180000"
         run: |
           set -euo pipefail
           export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke.json"

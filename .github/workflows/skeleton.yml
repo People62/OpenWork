@@ -100,6 +100,24 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # The engine is ~176 MB and is not in the repository, so a clean checkout
+      # has none. It is fetched here and verified against the sha256 pinned in
+      # apps/desktop/opencode.json — a mismatch stops the build rather than
+      # shipping an archive nobody vouched for.
+      #
+      # Cached by version and target, because 176 MB per job adds up.
+      - name: Cache the OpenCode engine
+        id: engine-cache
+        uses: actions/cache@v4
+        with:
+          path: apps/desktop/src-tauri/binaries
+          key: opencode-${{ hashFiles('apps/desktop/opencode.json') }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Fetch the OpenCode engine
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        working-directory: apps/desktop
+        run: bun run sidecar
+
       - name: Build the interface
         working-directory: apps/ui
         run: bun run build
@@ -267,18 +285,44 @@ jobs:
           binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai"
           "${binary}" "openwork://den-auth?grant=${RANTAI_SMOKE_DEEP_LINK}"
 
-      # The Phase 2 gate asks for the engine's failure path to be tested: run
-      # without the engine binary, and make sure the message is right. OpenCode
-      # is 176 MB and is not in the repository — but testing its *absence* needs
-      # no download at all, so this part of the gate runs on every round, on all
-      # three platforms, for nothing.
+      # The Phase 4 gate: an installed application must be able to run the
+      # engine it shipped with. An installer that carries an engine it cannot
+      # actually run is worse than one that carries none, because the failure
+      # only shows up on a user's machine.
       #
-      # RANTAI_OPENCODE points at nothing, and the interface demands the message
-      # names the cause. If the engine starts anyway — because the runner happens
-      # to have an OpenCode — the interface fails the smoke run rather than
-      # quietly passing. A check that does not control its inputs already made
-      # three reproduction attempts in Rantai worthless.
-      - name: Run the check without an engine binary
+      # Not enough that the engine starts — the interface demands its source is
+      # the bundled sidecar, not some OpenCode that happens to be on the runner.
+      - name: Run the engine from the bundle
+        shell: bash
+        env:
+          RANTAI_SMOKE: "1"
+          RANTAI_SMOKE_ENGINE: "present"
+          RANTAI_SMOKE_TIMEOUT_MS: "180000"
+        run: |
+          set -euo pipefail
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-engine-present.json"
+
+          case "${RUNNER_OS}" in
+            Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
+            macOS)   binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai" ;;
+            *)       binary=apps/desktop/src-tauri/target/release/rantai ;;
+          esac
+
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            xvfb-run -a "${binary}"
+          else
+            "${binary}"
+          fi
+
+      # The Phase 2 gate asks for the engine's failure path to be tested: run
+      # without the engine binary, and make sure the message names the cause.
+      #
+      # Now that the engine really is bundled, pointing RANTAI_OPENCODE at
+      # nothing is no longer enough — the application would simply find its
+      # sidecar. So the sidecar is moved aside first. That is a truer test than
+      # the environment variable ever was: it is what a corrupted installation
+      # actually looks like.
+      - name: Run the check with the engine removed
         shell: bash
         env:
           RANTAI_SMOKE: "1"
@@ -286,17 +330,29 @@ jobs:
           RANTAI_SMOKE_TIMEOUT_MS: "120000"
         run: |
           set -euo pipefail
-          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-engine.json"
-          case "${RUNNER_OS}" in
-            Windows) export RANTAI_OPENCODE='C:\jalan\yang\sengaja\tidak\ada\opencode.exe' ;;
-            *)       export RANTAI_OPENCODE=/jalan/yang/sengaja/tidak/ada/opencode ;;
-          esac
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-engine-absent.json"
 
           case "${RUNNER_OS}" in
-            Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
-            macOS)   binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai" ;;
-            *)       binary=apps/desktop/src-tauri/target/release/rantai ;;
+            Windows)
+              binary=apps/desktop/src-tauri/target/release/rantai.exe
+              engine=apps/desktop/src-tauri/target/release/opencode.exe
+              export RANTAI_OPENCODE='C:\nowhere\opencode.exe'
+              ;;
+            macOS)
+              binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai"
+              engine="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/Resources/opencode"
+              export RANTAI_OPENCODE=/nowhere/opencode
+              ;;
+            *)
+              binary=apps/desktop/src-tauri/target/release/rantai
+              engine=apps/desktop/src-tauri/target/release/opencode
+              export RANTAI_OPENCODE=/nowhere/opencode
+              ;;
           esac
+
+          test -f "${engine}" || { echo "expected a bundled engine at ${engine}"; exit 1; }
+          mv "${engine}" "${engine}.aside"
+          trap 'mv "${engine}.aside" "${engine}" 2>/dev/null || true' EXIT
 
           if [ "${RUNNER_OS}" = "Linux" ]; then
             xvfb-run -a "${binary}"
