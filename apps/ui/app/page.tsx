@@ -21,7 +21,7 @@ const SIGNALS = [
   "ipc-roundtrip",
   "data-roundtrip",
   "deep-link-received",
-  "engine-absent-correct",
+  "engine-as-expected",
   "data-persisted",
 ] as const;
 type Signal = (typeof SIGNALS)[number];
@@ -102,15 +102,16 @@ export default function Home() {
           mark("data-persisted");
         }
 
-        // Signal 6 — only asked for when CI deliberately runs without an engine
-        // binary. The Phase 2 gate wants the failure path tested first: the
-        // message must name the cause, not the cleanup symptom.
-        if (expectations.engineAbsent) {
-          await proveEngineAbsent();
+        // Signal 6 — only asked for when CI says what it expects of the engine.
+        // "absent" tests the Phase 2 failure path; "present" tests the Phase 4
+        // one, that an installed application can actually run the engine it
+        // shipped with.
+        if (expectations.engine) {
+          await proveEngine(expectations.engine);
           if (cancelled) return;
-          await unwrap(commands.reportSignal("engine-absent-correct"));
+          await unwrap(commands.reportSignal("engine-as-expected"));
           if (cancelled) return;
-          mark("engine-absent-correct");
+          mark("engine-as-expected");
         }
       } catch (e) {
         if (cancelled) return;
@@ -287,6 +288,33 @@ async function proveDeepLinkArrived(expectedGrant: string): Promise<void> {
       `the grant that arrived differs: ${parsed.grant}, not ${expectedGrant}`,
     );
   }
+}
+
+/// Checks the engine against what CI expects of it.
+///
+/// "present" is the Phase 4 gate: an installer that carries an engine it cannot
+/// actually run is worse than one that carries none, because the failure only
+/// shows up on a user's machine. It is not enough that the engine starts — it
+/// has to start from the bundle, not from some OpenCode that happens to be on
+/// the runner.
+async function proveEngine(expectation: string): Promise<void> {
+  if (expectation === "present") {
+    const status = await unwrap(commands.startEngine("."));
+    if (!status.running) {
+      throw new Error("the engine reported itself not running after being started");
+    }
+    if (status.source !== "Sidecar") {
+      throw new Error(
+        `the engine started from ${status.source} (${status.binaryPath}), not from the bundled sidecar — ` +
+          "the installer would ship an engine it never uses",
+      );
+    }
+    // Leave nothing running behind the check.
+    await unwrap(commands.stopEngine());
+    return;
+  }
+
+  await proveEngineAbsent();
 }
 
 /// Starts the engine when its binary is deliberately absent, and demands the

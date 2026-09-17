@@ -21,14 +21,21 @@ use tauri::{Manager, State};
 ///   3. `data-roundtrip`  — data was written to SQLite and read back intact
 const CORE_SIGNALS: [&str; 3] = ["webview-loaded", "ipc-roundtrip", "data-roundtrip"];
 
-/// A fourth signal, only required when CI deliberately runs the application
-/// without an engine binary. The Phase 2 gate asks for it explicitly: run
-/// without the engine binary, and make sure the message is right.
+/// A fourth signal, only required when CI says what it expects of the engine.
 ///
-/// It is kept separate because OpenCode is 176 MB and is not in the repository.
-/// Testing its *absence* needs no download at all — so this part of the gate can
-/// run on every CI round, on all three platforms, for nothing.
-const SIGNAL_ENGINE_ABSENT: &str = "engine-absent-correct";
+/// Two expectations, and they test opposite things:
+///
+///   `absent`  — the application is run with RANTAI_OPENCODE pointing at
+///               nothing, and the message must name the cause. The Phase 2 gate
+///               asks for this explicitly. It needs no download at all, so it
+///               runs on every CI round, on all three platforms, for nothing.
+///
+///   `present` — the application is run as installed, and the engine must start
+///               *from the bundle it shipped with*. This is the Phase 4 gate:
+///               an installer that carries an engine it cannot actually run is
+///               worse than one that carries none, because the failure only
+///               shows up on a user's machine.
+const SIGNAL_ENGINE: &str = "engine-as-expected";
 
 /// A fifth signal, required when CI launches the application with a deep link and
 /// says which grant should arrive.
@@ -49,10 +56,12 @@ const SIGNAL_PERSISTENCE: &str = "data-persisted";
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 
-/// When this is on, the application is run with RANTAI_OPENCODE deliberately
-/// pointing at nothing, and the interface must prove the message is right.
-pub fn expects_engine_absent() -> bool {
-    std::env::var("RANTAI_SMOKE_ENGINE_ABSENT").is_ok_and(|v| v == "1")
+/// What CI expects of the engine: "absent" or "present". Anything else is
+/// ignored rather than guessed at.
+pub fn engine_expectation() -> Option<String> {
+    std::env::var("RANTAI_SMOKE_ENGINE")
+        .ok()
+        .filter(|v| v == "absent" || v == "present")
 }
 
 /// The grant that should arrive through a deep link, if CI asks for one.
@@ -86,8 +95,8 @@ fn persistence_check() -> Option<PersistenceCheck> {
 
 fn required_signals() -> Vec<&'static str> {
     let mut signals = CORE_SIGNALS.to_vec();
-    if expects_engine_absent() {
-        signals.push(SIGNAL_ENGINE_ABSENT);
+    if engine_expectation().is_some() {
+        signals.push(SIGNAL_ENGINE);
     }
     if expected_deep_link().is_some() {
         signals.push(SIGNAL_DEEP_LINK);
@@ -105,7 +114,8 @@ fn required_signals() -> Vec<&'static str> {
 #[serde(rename_all = "camelCase")]
 pub struct SmokeExpectations {
     pub enabled: bool,
-    pub engine_absent: bool,
+    /// "absent" or "present", when CI asks for either.
+    pub engine: Option<String>,
     /// When set, the interface must prove this grant is the one that arrived by
     /// deep link.
     pub deep_link: Option<String>,
@@ -118,7 +128,7 @@ pub struct SmokeExpectations {
 pub fn smoke_expectations() -> SmokeExpectations {
     SmokeExpectations {
         enabled: enabled(),
-        engine_absent: expects_engine_absent(),
+        engine: engine_expectation(),
         deep_link: expected_deep_link(),
         persistence: persistence_check(),
     }

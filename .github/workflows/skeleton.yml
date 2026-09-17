@@ -282,7 +282,7 @@ jobs:
         shell: bash
         env:
           RANTAI_SMOKE: "1"
-          RANTAI_SMOKE_ENGINE_ABSENT: "1"
+          RANTAI_SMOKE_ENGINE: "absent"
           RANTAI_SMOKE_TIMEOUT_MS: "120000"
         run: |
           set -euo pipefail
