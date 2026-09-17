@@ -31,7 +31,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  renameSync,
+  copyFileSync,
   rmSync,
   statSync,
 } from "node:fs";
@@ -137,7 +137,10 @@ try {
   }
 
   mkdirSync(binariesDir, { recursive: true });
-  renameSync(found, destination);
+  // Copied rather than renamed. On the Windows runner the temp directory is on
+  // C: and the workspace on D:, and `rename` cannot cross drives — it fails with
+  // EXDEV. The temp directory is removed by the `finally` below either way.
+  copyFileSync(found, destination);
   if (!isWindows) chmodSync(destination, 0o755);
 
   const megabytes = (statSync(destination).size / 1024 / 1024).toFixed(0);
