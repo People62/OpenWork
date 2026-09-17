@@ -21,6 +21,7 @@
 //
 // Exits non-zero when something is short, so it can gate a change.
 
+import { readFile } from "node:fs/promises";
 import { connect, discoverEndpoint, sleep, waitForPage } from "./cdp.mjs";
 
 // Runs inside the page. Written as one expression because that is what
@@ -125,38 +126,29 @@ const AUDIT = `(function () {
 // the screens render the way they do in the application — long names, real
 // timestamps, several rows — rather than in a tidy empty state that hides how
 // the layout behaves once it has something in it.
+// Stand-in data for the audit, read from the same fixtures the dev mock uses.
+//
+// Two sets of pretend data drift apart, and then the thing being audited is not
+// the thing being looked at.
 const TAURI_STUB = `
 (function () {
+  var answers = ${await readFile(new URL("../app/dev-fixtures.json", import.meta.url), "utf8")};
   var now = Date.now();
-  var workspaces = [
-    { id: "w1", name: "openwork-new", path: "/home/someone/openwork-new", createdAt: now - 86400000 },
-    { id: "w2", name: "a-much-longer-workspace-name-that-truncates", path: "/home/someone/projects/a-much-longer-workspace-name-that-truncates", createdAt: now - 172800000 }
-  ];
-  var sessions = [
-    { id: "s1", workspaceId: "w1", title: "Looking at the release workflow", createdAt: now - 7200000, updatedAt: now - 600000 },
-    { id: "s2", workspaceId: "w1", title: "A session title long enough to need truncating somewhere", createdAt: now - 90000000, updatedAt: now - 86400000 }
-  ];
-  var messages = [
-    { id: "m1", sessionId: "s1", role: "user", content: "Why did the Windows job fail?", createdAt: now - 700000 },
-    { id: "m2", sessionId: "s1", role: "assistant", content: "The temp directory is on C: and the workspace on D:, and rename cannot cross drives.", createdAt: now - 690000 }
-  ];
-  var answers = {
-    hello: { message: "Hello from Rust, Rantai.", platform: "linux", arch: "x86_64", tauriVersion: "2.11.5", appVersion: "0.0.1" },
-    list_workspaces: workspaces,
-    list_sessions: sessions,
-    list_messages: messages,
-    check_database: { writeReadIntact: true, workspaceCount: 2, sessionCount: 2, messageCount: 2 },
-    engine_status: { running: false, address: null, binaryPath: null, source: null, uptimeSeconds: null },
-    deep_link_status: { scheme: "openwork", registered: true, error: null },
-    launch_links: [],
-    smoke_expectations: { enabled: false, engine: null, deepLink: null, persistence: null },
-    list_models: [],
-    report_signal: null
-  };
+  (function fix(v) {
+    if (Array.isArray(v)) return v.forEach(fix);
+    if (v && typeof v === "object") {
+      for (var k in v) {
+        if (typeof v[k] === "number" && /At$/.test(k)) v[k] = now + v[k];
+        else fix(v[k]);
+      }
+    }
+  })(answers);
   window.__TAURI_INTERNALS__ = {
     transformCallback: function (cb) { return cb; },
     invoke: function (cmd) {
-      return Promise.resolve(Object.prototype.hasOwnProperty.call(answers, cmd) ? answers[cmd] : null);
+      return Promise.resolve(
+        Object.prototype.hasOwnProperty.call(answers, cmd) ? answers[cmd] : null,
+      );
     }
   };
 })();
