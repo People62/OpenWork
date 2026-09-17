@@ -21,14 +21,25 @@ tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 tokio = { version = "1.53.1", features = ["process", "io-util", "time", "sync", "macros", "rt-multi-thread"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 thiserror = "2.0.20"
-# Tanpa TLS: satu-satunya yang diajak bicara Rust lewat HTTP adalah proses
-# OpenCode di 127.0.0.1. Den diurus sisi TypeScript, bukan dari sini. Menyalakan
-# rustls berarti menyeret aws-lc dan seluruh rantainya tanpa ada yang memakainya.
-reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream"] }
+# TLS is on, and it was not always. This crate only ever talks to the OpenCode
+# process on 127.0.0.1, so it started without TLS on purpose.
+#
+# tauri-plugin-updater changed that: it needs HTTPS to reach GitHub, and Cargo
+# unifies features across the graph. The single reqwest in the build then had
+# `rustls-no-provider` turned on — TLS compiled in, but no crypto provider
+# installed — and *every* reqwest Client panicked on construction, including the
+# ones talking to localhost. A plugin broke a feature it has nothing to do with.
+#
+# Only a test that actually built a client caught it. `cargo check` and clippy
+# were both perfectly happy.
+#
+# Naming `rustls` here brings a provider with it, so the client builds again.
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream", "rustls"] }
 tauri-plugin-deep-link = "2.4.10"
 tauri-plugin-opener = "2.5.5"
 url = "2.5.8"
 tauri-plugin-dialog = "2.7.3"
+tauri-plugin-updater = "2.11.0"
 
 [profile.dev]
 incremental = true

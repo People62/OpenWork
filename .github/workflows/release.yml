@@ -116,8 +116,17 @@ jobs:
           test -f apps/ui/out/index.html \
             || { echo "apps/ui/out/index.html tidak ada — next build tidak menghasilkan apa pun"; exit 1; }
 
+      # The updater's own signing key, not an OS code-signing certificate —
+      # those are separate things. This one proves an update came from this
+      # repository and costs nothing; it is generated locally with
+      # `tauri signer generate`. An installed application refuses any update not
+      # signed by it, so losing the key means no installation already out there
+      # can ever be updated again.
       - name: Build the installer
         working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bun run tauri build
 
       # The binary under test must be the one produced by `tauri build` above.
@@ -155,8 +164,12 @@ jobs:
           bundle=apps/desktop/src-tauri/target/release/bundle
           test -d "${bundle}" || { echo "no bundle directory"; exit 1; }
 
+          # The updater artifacts and their .sig files come along too: the
+          # updater downloads the archive, not the installer, and refuses it
+          # without the matching signature.
           find "${bundle}" -type f \
-            \( -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) \
+            \( -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \
+               -o -name '*.tar.gz' -o -name '*.zip' -o -name '*.sig' \) \
             -exec cp {} output/ \;
 
           count=$(find output -type f | wc -l)
@@ -221,6 +234,73 @@ jobs:
               --title "${title}" \
               --notes "${notes}" \
               ${prerelease}
+          fi
+
+          # The updater manifest — for tagged releases only.
+          #
+          # The rolling `main-terbaru` build always carries the version in
+          # tauri.conf.json, and an updater only offers a version *higher* than
+          # the one installed. A manifest from the rolling build could therefore
+          # never trigger an update; it would only ever be fetched and rejected.
+          #
+          # So updates are driven by `v*` tags. To ship one: bump the version in
+          # tauri.conf.json, then push a tag.
+          #
+          # Built here rather than by the bundler, because it has to describe all
+          # three platforms at once and each was built on a different runner.
+          #
+          # A platform with no signature is left out entirely. An entry that
+          # points at an artifact the updater cannot verify is worse than no
+          # entry: the application would find an update, download it, and refuse
+          # it — every single time it checked.
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+          python3 - "${tag}" "${GITHUB_SHA}" <<'PY'
+          import json, os, sys, pathlib
+
+          tag, sha = sys.argv[1], sys.argv[2]
+          version = tag[1:] if tag.startswith("v") else "0.0.0"
+          base = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{tag}"
+
+          # Tauri's platform keys, and the artifact suffix each one expects.
+          wanted = {
+              "linux-x86_64": ".AppImage.tar.gz",
+              "darwin-aarch64": ".app.tar.gz",
+              "windows-x86_64": ".nsis.zip",
+          }
+
+          out = pathlib.Path("output")
+          platforms = {}
+          for key, suffix in wanted.items():
+              archive = next((f for f in out.iterdir() if f.name.endswith(suffix)), None)
+              if archive is None:
+                  print(f"latest.json: no {suffix} — skipping {key}")
+                  continue
+              signature = out / f"{archive.name}.sig"
+              if not signature.exists():
+                  print(f"latest.json: {archive.name} has no .sig — skipping {key}")
+                  continue
+              platforms[key] = {
+                  "signature": signature.read_text().strip(),
+                  "url": f"{base}/{archive.name}",
+              }
+
+          if not platforms:
+              print("latest.json: no signed artifacts at all — not writing a manifest")
+              sys.exit(0)
+
+          manifest = {
+              "version": version,
+              "notes": f"Built from {sha[:9]}.",
+              "pub_date": __import__("datetime").datetime.now(
+                  __import__("datetime").timezone.utc
+              ).isoformat(),
+              "platforms": platforms,
+          }
+          (out / "latest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          print(f"latest.json: {', '.join(platforms)}")
+          PY
+          else
+            echo "latest.json: skipped — the rolling build cannot drive updates"
           fi
 
           gh release upload "${tag}" output/* --clobber

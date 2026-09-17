@@ -250,6 +250,35 @@ Selalu ada kotak tempel manual di sebelahnya: pengguna menempel tautan utuh atau
 kodenya saja. Murni TypeScript, nol native, dan karena itu satu-satunya bagian
 alur masuk yang pasti bekerja di mana pun deep link bermasalah.
 
+## Pembaruan otomatis
+
+Updater punya kunci penandatangannya sendiri, dibuat lokal dengan
+`tauri signer generate`. Ia **bukan** sertifikat penandatanganan sistem operasi —
+keduanya hal berbeda. Kunci ini membuktikan sebuah pembaruan datang dari
+repositori ini, dan gratis. Penandatanganan OS-lah yang membungkam SmartScreen
+dan Gatekeeper, dan proyek ini sengaja berjalan tanpanya.
+
+Kunci privatnya ada di GitHub Secrets repositori ini. **Kalau ia hilang, tidak
+ada pembaruan yang bisa mencapai aplikasi yang sudah terpasang di mana pun.**
+
+### Pembaruan digerakkan tag, bukan build bergulir
+
+`main-terbaru` selalu membawa versi yang tertulis di `tauri.conf.json`, dan
+updater hanya menawarkan versi yang *lebih tinggi* dari yang terpasang. Manifest
+dari build bergulir karena itu tidak akan pernah memicu pembaruan — ia hanya akan
+diambil lalu ditolak, setiap kali.
+
+Untuk mengirim pembaruan: naikkan versi di `tauri.conf.json`, lalu dorong tag
+`v*`.
+
+### Pemeriksaan tidak pernah otomatis
+
+Antarmuka yang bertanya, dan antarmuka yang memutuskan. Pembaruan yang memasang
+dirinya sendiri saat seseorang sedang di tengah percakapan dengan mesin adalah
+hasil yang lebih buruk daripada yang menunggu. Mesin dimatikan lebih dulu sebelum
+berkas aplikasi diganti — di Windows, proses anak yang masih hidup bisa mengunci
+berkas dan membuat penggantian gagal sama sekali.
+
 ## Yang berikutnya
 
 | Fase | Isi | Gerbang |
