@@ -1,32 +1,33 @@
-# Gerbang Fase 0: installer terbangun dan jendelanya *terbuka* di Windows,
-# macOS, dan Linux — di CI, bukan hanya di VM pengembangan.
+# The Phase 0 gate: the installer builds and its window *opens* on Windows,
+# macOS and Linux — in CI, not only on the development VM.
 #
-# Tauri memakai webview bawaan sistem, jadi "lintas platform" berarti tiga mesin
-# render, bukan satu: WebKitGTK di Linux, WKWebView di macOS, WebView2 di
-# Windows. Perbedaan di antara ketiganya tidak pernah muncul saat typecheck. Ini
-# hal termurah dikerjakan di commit pertama dan termahal ditunda.
+# Tauri uses the system webview, so "cross-platform" means three rendering
+# engines, not one: WebKitGTK on Linux, WKWebView on macOS, WebView2 on Windows.
+# Differences between them never show up in a typecheck. This is the cheapest
+# thing to do on the first commit and the most expensive to put off.
 #
-# Pemeriksaannya bukan tangkapan layar. Aplikasi dijalankan sungguhan dalam mode
-# smoke dan menunggu dua sinyal yang berurutan — yang kedua tidak mungkin tiba
-# kalau yang pertama tidak:
+# The check is not a screenshot. The application is genuinely run in smoke mode
+# and waits for an ordered set of signals — a later one cannot arrive unless the
+# one before it did:
 #
-#   1. webview-termuat — halaman termuat, bundel jalan, React ter-mount
-#   2. ipc-bulat       — jawaban Rust sampai ke layar lalu kembali ke Rust
+#   1. webview-loaded  — the page loaded, the bundle ran, React mounted
+#   2. ipc-roundtrip   — Rust's answer reached the screen and went back again
+#   3. data-roundtrip  — SQLite was written and read back intact
 #
-# Keduanya tiba: keluar 0. Lewat batas waktu: keluar 1, menyebutkan sinyal mana
-# yang tidak pernah datang.
+# All present: exit 0. Past the timeout: exit 1, naming which signal never came.
 
-name: Kerangka · tiga platform
+name: Skeleton · three platforms
 
-# `push` sengaja dibatasi ke main saja. Sebelumnya ia mencakup semua cabang
-# sekaligus `pull_request`, dan akibatnya tiap PR membangun Rust enam kali
-# bukan tiga: satu putaran untuk push ke cabangnya, satu lagi untuk PR-nya.
-# Keduanya menguji commit yang sama dan melaporkan nama cek yang sama, jadi
-# keduanya muncul sebagai "Required" di kotak merge dan waktu tunggunya
-# berlipat tanpa menambah satu pun informasi.
+# `push` is deliberately limited to main. It used to cover every branch as well
+# as `pull_request`, and so every PR built Rust six times instead of three: one
+# round for the push to its branch, another for the PR itself. Both tested the
+# same commit and reported the same check names, so both appeared as "Required"
+# in the merge box and the wait doubled without adding a single piece of
+# information.
 #
-# Konsekuensinya: cabang yang di-push tanpa PR tidak diperiksa. Itu disengaja —
-# gerbangnya adalah merge ke main, dan tiap merge ke main lewat PR.
+# The consequence: a branch pushed without a PR is not checked. That is
+# deliberate — the gate is the merge into main, and every merge into main goes
+# through a PR.
 on:
   push:
     branches: [main]
@@ -36,17 +37,17 @@ on:
 permissions:
   contents: read
 
-# Push beruntun ke PR yang sama tidak perlu diselesaikan semuanya; hanya commit
-# terakhir yang akan di-merge.
+# Successive pushes to the same PR do not all need to finish; only the last
+# commit will be merged.
 concurrency:
-  group: kerangka-${{ github.ref }}
+  group: skeleton-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   BUN_VERSION: "1.4.0"
 
 jobs:
-  kerangka:
+  skeleton:
     name: ${{ matrix.webview }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -66,23 +67,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Siapkan Bun
+      - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
-      - name: Siapkan Rust
+      - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Simpan cache build Rust
+      - name: Cache the Rust build
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
 
-      # WebKitGTK dan header pengembangannya tidak ada di runner Ubuntu, dan
-      # Xvfb satu-satunya tampilan yang ia punya. macOS dan Windows sudah
-      # membawa webview-nya sendiri.
-      - name: Pasang webview dan tampilan Linux
+      # WebKitGTK and its development headers are not on the Ubuntu runner, and
+      # Xvfb is the only display it has. macOS and Windows already ship their
+      # own webview.
+      - name: Install the Linux webview and display
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
@@ -96,17 +97,17 @@ jobs:
             patchelf \
             xvfb
 
-      - name: Pasang dependensi
+      - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Bangun antarmuka
+      - name: Build the interface
         working-directory: apps/ui
         run: bun run build
 
-      # Langkah CI yang hijau belum tentu mengerjakan sesuatu. Langkah di atas
-      # bisa lulus sambil tidak menghasilkan apa pun, dan `tauri build`
-      # berikutnya akan diam-diam memakai keluaran lama.
-      - name: Pastikan antarmuka benar-benar ter-export
+      # A green CI step does not necessarily do anything. The step above can
+      # pass while producing nothing at all, and the `tauri build` that follows
+      # would quietly use a stale output.
+      - name: Make sure the interface really exported
         shell: bash
         run: |
           set -euo pipefail
@@ -114,11 +115,11 @@ jobs:
             || { echo "apps/ui/out/index.html tidak ada — next build tidak menghasilkan apa pun"; exit 1; }
           echo "out/ berisi $(find apps/ui/out -type f | wc -l) berkas"
 
-      - name: Bangun installer
+      - name: Build the installer
         working-directory: apps/desktop
         run: bun run tauri build
 
-      - name: Sebutkan installer yang terbangun
+      - name: Name the installers that were built
         shell: bash
         run: |
           set -euo pipefail
@@ -131,13 +132,13 @@ jobs:
             -exec ls -lh {} \; | tee -a "${GITHUB_STEP_SUMMARY}"
           echo '```' >> "${GITHUB_STEP_SUMMARY}"
 
-      # Binary yang diuji harus yang dihasilkan langkah `tauri build` di atas.
-      # Yang menentukan bukan profil debug atau release: `cargo build --release`
-      # biasa tetap menghasilkan konteks dev, dan aplikasinya akan memuat devUrl
-      # alih-alih hasil export yang tertanam. Jangan pernah menyelipkan
-      # `cargo build` di antara kedua langkah ini — itu menimpa binary yang benar
-      # dengan yang salah, dan kegagalannya tampak seperti webview yang mati.
-      - name: Jalankan pemeriksaan webview
+      # The binary under test must be the one produced by `tauri build` above.
+      # What decides this is not the debug or release profile: a plain
+      # `cargo build --release` still produces a dev context, and the application
+      # loads devUrl instead of the embedded export. Never slip a `cargo build`
+      # between these two steps — it overwrites the right binary with the wrong
+      # one, and the failure looks like a dead webview.
+      - name: Run the webview check
         shell: bash
         env:
           RANTAI_SMOKE: "1"
@@ -160,24 +161,24 @@ jobs:
             "${binary}"
           fi
 
-      # Rilis 1 menjanjikan percakapan "tersimpan di SQLite dan bisa dibuka
-      # kembali". Itu hanya terbukti dengan menjalankan aplikasi dua kali:
-      # sekali menulis, sekali membaca sesudah prosesnya benar-benar mati.
+      # Release 1 promises a conversation is "saved in SQLite and can be
+      # reopened". That is only provable by running the application twice: once
+      # to write, once to read after the process has genuinely died.
       #
-      # Tes dalam satu proses tidak membuktikannya — ia bisa lulus sepenuhnya
-      # dari cache di memori tanpa satu byte pun menyentuh disk.
-      - name: Tulis data yang harus bertahan
+      # A test inside one process does not prove it — it can pass entirely from
+      # an in-memory cache without a single byte touching disk.
+      - name: Write data that must persist
         shell: bash
         env:
           RANTAI_SMOKE: "1"
-          RANTAI_SMOKE_SIMPAN: "tulis"
+          RANTAI_SMOKE_PERSIST: "tulis"
           RANTAI_SMOKE_TIMEOUT_MS: "120000"
         run: |
           set -euo pipefail
-          tanda="bertahan-${GITHUB_RUN_ID}-${RUNNER_OS}"
-          echo "RANTAI_SMOKE_SIMPAN_TANDA=${tanda}" >> "${GITHUB_ENV}"
-          export RANTAI_SMOKE_SIMPAN_TANDA="${tanda}"
-          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-tulis.json"
+          tanda="persisted-${GITHUB_RUN_ID}-${RUNNER_OS}"
+          echo "RANTAI_SMOKE_PERSIST_MARKER=${tanda}" >> "${GITHUB_ENV}"
+          export RANTAI_SMOKE_PERSIST_MARKER="${tanda}"
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-write.json"
 
           case "${RUNNER_OS}" in
             Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
@@ -191,15 +192,15 @@ jobs:
             "${binary}"
           fi
 
-      - name: Baca kembali sesudah aplikasi ditutup
+      - name: Read it back after the application closed
         shell: bash
         env:
           RANTAI_SMOKE: "1"
-          RANTAI_SMOKE_SIMPAN: "baca"
+          RANTAI_SMOKE_PERSIST: "baca"
           RANTAI_SMOKE_TIMEOUT_MS: "120000"
         run: |
           set -euo pipefail
-          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-baca.json"
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-read.json"
 
           case "${RUNNER_OS}" in
             Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
@@ -213,28 +214,28 @@ jobs:
             "${binary}"
           fi
 
-      # Alur masuk Den digarap paling awal di Fase 3 dengan sengaja, dan inilah
-      # bagiannya yang paling tidak pasti: registrasi skema URL berperilaku
-      # berbeda tiap OS, paling rapuh di mode pengembangan, dan **di Rantai
-      # tidak pernah tercakup uji CI sama sekali** — tiga sinyal hijau di sana
-      # hanya menguji webview, React, bridge, dan IPC.
+      # The Den sign-in was built first in Phase 3 on purpose, and this is its
+      # least certain part: URL scheme registration behaves differently on every
+      # OS, is at its most fragile in development mode, and **was never covered
+      # by CI in Rantai at all** — the three green signals there only exercised
+      # the webview, React, the bridge and IPC.
       #
-      # Di Linux dan Windows, sistem menyerahkan tautan lewat argumen baris
-      # perintah, jadi ia bisa diuji langsung. Aplikasi diluncurkan dengan
-      # tautan, dan antarmuka menuntut grant yang benar sampai ke layar —
-      # tautan yang tidak sampai, atau sampai dengan grant lain, menggagalkan
-      # langkah ini.
-      - name: Jalankan pemeriksaan tautan masuk Den
+      # On Linux and Windows the system hands the link over as a command-line
+      # argument, so it can be tested directly. The application is launched with
+      # a link, and the interface demands that the right grant reaches the
+      # screen — a link that never arrives, or arrives with a different grant,
+      # fails this step.
+      - name: Run the Den sign-in link check
         if: runner.os != 'macOS'
         shell: bash
         env:
           RANTAI_SMOKE: "1"
-          RANTAI_SMOKE_TAUTAN: "GRANTUJICOBACI1234567890"
+          RANTAI_SMOKE_DEEP_LINK: "GRANTTESTCI1234567890"
           RANTAI_SMOKE_TIMEOUT_MS: "120000"
         run: |
           set -euo pipefail
-          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-tautan.json"
-          tautan="openwork://den-auth?grant=${RANTAI_SMOKE_TAUTAN}"
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-deeplink.json"
+          tautan="openwork://den-auth?grant=${RANTAI_SMOKE_DEEP_LINK}"
 
           case "${RUNNER_OS}" in
             Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
@@ -247,45 +248,45 @@ jobs:
             "${binary}" "${tautan}"
           fi
 
-      # macOS menyerahkan deep link lewat Apple Events, bukan argumen baris
-      # perintah, jadi cara di atas belum tentu berlaku di sana. Dijalankan
-      # sebagai penyelidikan yang tidak memblokir: hasilnya memberi tahu apakah
-      # jalurnya sama, tanpa menahan rilis atas sesuatu yang memang belum
-      # diketahui. Kalau ia hijau berkali-kali, `continue-on-error` dilepas.
-      - name: Selidiki tautan masuk di macOS (tidak memblokir)
+      # macOS hands deep links over through Apple Events rather than
+      # command-line arguments, so the approach above may not hold there. Run as
+      # a non-blocking probe: the result says whether the path is the same,
+      # without holding a release over something genuinely unknown. Once it is
+      # green a few times, `continue-on-error` comes off.
+      - name: Probe the sign-in link on macOS (non-blocking)
         if: runner.os == 'macOS'
         continue-on-error: true
         shell: bash
         env:
           RANTAI_SMOKE: "1"
-          RANTAI_SMOKE_TAUTAN: "GRANTUJICOBACI1234567890"
+          RANTAI_SMOKE_DEEP_LINK: "GRANTTESTCI1234567890"
           RANTAI_SMOKE_TIMEOUT_MS: "60000"
         run: |
           set -euo pipefail
-          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-tautan.json"
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-deeplink.json"
           binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai"
-          "${binary}" "openwork://den-auth?grant=${RANTAI_SMOKE_TAUTAN}"
+          "${binary}" "openwork://den-auth?grant=${RANTAI_SMOKE_DEEP_LINK}"
 
-      # Gerbang Fase 2 menuntut jalur gagal mesin diuji: jalankan tanpa binary
-      # mesin, dan pastikan pesannya benar. OpenCode 176 MB dan tidak ikut di
-      # dalam repo — tapi menguji *ketiadaannya* justru tidak butuh unduhan apa
-      # pun, jadi bagian gerbang ini berjalan di tiap putaran, di ketiga
-      # platform, dengan harga nol.
+      # The Phase 2 gate asks for the engine's failure path to be tested: run
+      # without the engine binary, and make sure the message is right. OpenCode
+      # is 176 MB and is not in the repository — but testing its *absence* needs
+      # no download at all, so this part of the gate runs on every round, on all
+      # three platforms, for nothing.
       #
-      # RANTAI_OPENCODE menunjuk ketiadaan, dan antarmuka menuntut pesannya
-      # menyebut penyebabnya. Kalau mesin justru menyala — karena runner
-      # kebetulan punya OpenCode — antarmuka menggagalkan smoke alih-alih
-      # diam-diam lolos. Pengujian yang tidak menguasai masukannya sudah pernah
-      # membuat tiga percobaan reproduksi di Rantai sia-sia.
-      - name: Jalankan pemeriksaan tanpa binary mesin
+      # RANTAI_OPENCODE points at nothing, and the interface demands the message
+      # names the cause. If the engine starts anyway — because the runner happens
+      # to have an OpenCode — the interface fails the smoke run rather than
+      # quietly passing. A check that does not control its inputs already made
+      # three reproduction attempts in Rantai worthless.
+      - name: Run the check without an engine binary
         shell: bash
         env:
           RANTAI_SMOKE: "1"
-          RANTAI_SMOKE_MESIN_ABSEN: "1"
+          RANTAI_SMOKE_ENGINE_ABSENT: "1"
           RANTAI_SMOKE_TIMEOUT_MS: "120000"
         run: |
           set -euo pipefail
-          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-mesin.json"
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-engine.json"
           case "${RUNNER_OS}" in
             Windows) export RANTAI_OPENCODE='C:\jalan\yang\sengaja\tidak\ada\opencode.exe' ;;
             *)       export RANTAI_OPENCODE=/jalan/yang/sengaja/tidak/ada/opencode ;;
@@ -303,9 +304,9 @@ jobs:
             "${binary}"
           fi
 
-      # Gerbang Fase 2 juga menuntut tidak ada proses yatim. Kalau langkah di
-      # atas meninggalkan OpenCode hidup, ia akan terlihat di sini.
-      - name: Pastikan tidak ada mesin yang tertinggal
+      # The Phase 2 gate also asks for no orphaned processes. If the step above
+      # left an OpenCode alive, it shows up here.
+      - name: Make sure no engine was left behind
         if: runner.os != 'Windows'
         shell: bash
         run: |
@@ -317,9 +318,9 @@ jobs:
           fi
           echo "tidak ada proses mesin yang tertinggal"
 
-      # Laporannya menyebut sinyal mana yang tiba, jadi kegagalan mengatakan apa
-      # yang rusak — bukan hanya bahwa sesuatu rusak.
-      - name: Laporan
+      # The report names which signals arrived, so a failure says what broke —
+      # not merely that something did.
+      - name: Report
         if: always()
         shell: bash
         run: |
@@ -333,7 +334,7 @@ jobs:
             echo 'Aplikasi tidak pernah menulis laporan — ia gagal sebelum sampai ke sana.' >> "${GITHUB_STEP_SUMMARY}"
           fi
 
-      - name: Unggah installer
+      - name: Upload the installers
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -346,8 +347,13 @@ jobs:
             apps/desktop/src-tauri/target/release/bundle/**/*.exe
             apps/desktop/src-tauri/target/release/bundle/**/*.msi
 
-  # Murah, cepat, dan menangkap kelas galat yang berbeda dari matriks di atas.
-  periksa:
+  # Cheap, fast, and catches a different class of error than the matrix above.
+  #
+  # NOTE: this job is still named in Indonesian. Renaming it would break branch
+  # protection, which matches required checks by name — every open PR would wait
+  # forever for a check that no longer reports. Rename it and update the required
+  # contexts in the same move, with no PR open.
+  checks:
     name: Typecheck dan lint
     runs-on: ubuntu-22.04
     timeout-minutes: 20
@@ -356,22 +362,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Siapkan Bun
+      - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
-      - name: Siapkan Rust
+      - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Simpan cache build Rust
+      - name: Cache the Rust build
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
 
-      - name: Pasang webview Linux
+      - name: Install the Linux webview
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -381,10 +387,10 @@ jobs:
             libsoup-3.0-dev \
             librsvg2-dev
 
-      - name: Pasang dependensi
+      - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Format Rust
+      - name: Rust formatting
         working-directory: apps/desktop/src-tauri
         run: cargo fmt --check
 
@@ -392,19 +398,19 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: cargo clippy --all-targets -- -D warnings
 
-      # Tes ini menulis ulang apps/ui/app/bindings.ts dari daftar perintah di
-      # Rust. Ia juga menjalankan migrasi SQLite terhadap basis data di memori,
-      # jadi SQL yang salah ketik gagal di sini, bukan saat aplikasi dibuka.
-      - name: Tes Rust
+      # This test rewrites apps/ui/app/bindings.ts from the command list in
+      # Rust. It also runs the SQLite migrations against an in-memory database,
+      # so mistyped SQL fails here rather than when the application opens.
+      - name: Rust tests
         working-directory: apps/desktop/src-tauri
         run: cargo test
 
-      # Gerbang Fase 1. Kalau langkah di atas mengubah bindings.ts, berarti
-      # bentuk data di Rust bergerak tanpa berkas itu ikut diperbarui — dan
-      # pemanggil di Next.js belum tentu menyusul. Diff yang tidak bersih di
-      # sini adalah satu-satunya penangkal terhadap dua definisi kebenaran yang
-      # perlahan berbeda tanpa ada yang menyadarinya.
-      - name: Pastikan bindings.ts mutakhir
+      # The Phase 1 gate. If the step above changed bindings.ts, the shape of
+      # the data in Rust moved without that file following — and the callers in
+      # Next.js may not have followed either. An unclean diff here is the only
+      # guard against two definitions of the truth slowly diverging with nobody
+      # noticing.
+      - name: Make sure bindings.ts is current
         shell: bash
         run: |
           set -euo pipefail
@@ -417,17 +423,16 @@ jobs:
           fi
           echo "bindings.ts mutakhir"
 
-      # Dijalankan setelah bindings dipastikan mutakhir — kalau tidak, typecheck
-      # bisa lulus terhadap berkas lama dan menyembunyikan justru hal yang
-      # gerbang ini jaga.
-      - name: Typecheck antarmuka
+      # Run after bindings are confirmed current — otherwise the typecheck could
+      # pass against a stale file and hide the very thing this gate guards.
+      - name: Typecheck the interface
         working-directory: apps/ui
         run: bun run typecheck
 
-      # Tes antarmuka. Pengurai tautan masuk Den diuji di sini — bagian alur
-      # masuk yang bisa diuji tanpa jendela, tanpa Tauri, dan tanpa Den.
-      # Menyempitkan yang tidak terujikan sekecil mungkin adalah seluruh
-      # strategi Fase 3; yang tersisa hanya dua sentuhan native.
-      - name: Tes antarmuka
+      # Interface tests. The Den sign-in link parsers are tested here — the part
+      # of the sign-in testable without a window, without Tauri and without Den.
+      # Shrinking the untestable part as far as it will go is the whole strategy
+      # of Phase 3; what is left is two native touches.
+      - name: Interface tests
         working-directory: apps/ui
         run: bun test

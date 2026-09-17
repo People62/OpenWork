@@ -1,165 +1,178 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PanelDen } from "./den/panel";
-import { uraiTautanMasuk } from "./den/tautan";
-import { PanelMesin } from "./mesin";
-import { PanelRuang } from "./ruang/panel";
-import { buka, commands, diDalamTauri, type PeriksaDb, type Sapaan } from "./tauri";
+import { DenPanel } from "./den/panel";
+import { parseAuthLink } from "./den/links";
+import { EnginePanel } from "./engine";
+import { WorkspacePanel } from "./workspace/panel";
+import {
+  commands,
+  insideTauri,
+  unwrap,
+  type DatabaseCheck,
+  type Greeting,
+} from "./tauri";
 
-// Tiga sinyal yang menutup gerbang, dan urutannya berarti: yang berikutnya tidak
-// mungkin tiba kalau yang sebelumnya tidak. Rust menunggu ketiganya saat
-// dijalankan dalam mode smoke di CI.
-const SINYAL = [
-  "webview-termuat",
-  "ipc-bulat",
-  "data-bulat",
-  "mesin-absen-benar",
-  "tautan-diterima",
-  "data-bertahan",
+// The signals that close the gate, and their order means something: a later one
+// cannot arrive unless the one before it did. Rust waits for whichever of them
+// CI has asked for.
+const SIGNALS = [
+  "webview-loaded",
+  "ipc-roundtrip",
+  "data-roundtrip",
+  "deep-link-received",
+  "engine-absent-correct",
+  "data-persisted",
 ] as const;
-type Sinyal = (typeof SINYAL)[number];
+type Signal = (typeof SIGNALS)[number];
 
-export default function Beranda() {
-  const [sapaan, setSapaan] = useState<Sapaan | null>(null);
-  const [periksa, setPeriksa] = useState<PeriksaDb | null>(null);
-  const [terkirim, setTerkirim] = useState<Sinyal[]>([]);
-  const [galat, setGalat] = useState<string | null>(null);
+export default function Home() {
+  const [greeting, setGreeting] = useState<Greeting | null>(null);
+  const [check, setCheck] = useState<DatabaseCheck | null>(null);
+  const [sent, setSent] = useState<Signal[]>([]);
+  const [error, setError] = useState<string | null>(null);
   const [tauri, setTauri] = useState(false);
-  // Workspace sungguhan menyusul di Fase 3; untuk sekarang mesin dijalankan di
-  // direktori kerja proses, yang cukup untuk membuktikan alirannya.
-  const dirKerja = ".";
+  // A real workspace directory follows; for now the engine runs in the process's
+  // working directory, which is enough to prove the flow.
+  const workingDir = ".";
 
   useEffect(() => {
-    const ada = diDalamTauri();
-    setTauri(ada);
-    if (!ada) return;
+    const present = insideTauri();
+    setTauri(present);
+    if (!present) return;
 
-    let batal = false;
-    const tandai = (s: Sinyal) => {
-      if (!batal) setTerkirim((sebelum) => [...sebelum, s]);
+    let cancelled = false;
+    const mark = (signal: Signal) => {
+      if (!cancelled) setSent((before) => [...before, signal]);
     };
 
     (async () => {
       try {
-        // Sinyal 1 — halaman termuat, bundel jalan, React ter-mount.
-        await buka(commands.laporSinyal("webview-termuat"));
-        if (batal) return;
-        tandai("webview-termuat");
+        // Signal 1 — the page loaded, the bundle ran, React mounted.
+        await unwrap(commands.reportSignal("webview-loaded"));
+        if (cancelled) return;
+        mark("webview-loaded");
 
-        const hasil = await commands.halo("Rantai");
-        if (batal) return;
-        setSapaan(hasil);
+        const hello = await commands.hello("Rantai");
+        if (cancelled) return;
+        setGreeting(hello);
 
-        // Sinyal 2 — jawaban Rust sampai kembali ke layar, lalu kembali lagi ke
-        // Rust. IPC bulat dua arah, bukan sekadar panggilan yang tidak melempar.
-        await buka(commands.laporSinyal("ipc-bulat"));
-        if (batal) return;
-        tandai("ipc-bulat");
+        // Signal 2 — Rust's answer reached the screen, then went back to Rust.
+        // A round trip in both directions, not merely a call that did not throw.
+        await unwrap(commands.reportSignal("ipc-roundtrip"));
+        if (cancelled) return;
+        mark("ipc-roundtrip");
 
-        // Sinyal 3 — SQLite ditulis dan dibaca kembali. Rust melakukannya di
-        // dalam transaksi yang dibatalkan, jadi tidak ada baris yang tersisa.
-        const db = await buka(commands.periksaBasisData());
-        if (batal) return;
-        if (!db.tulisBacaUtuh) {
-          throw new Error("basis data menulis, tapi yang dibaca kembali berbeda");
+        // Signal 3 — SQLite written and read back. Rust does it inside a
+        // transaction that is rolled back, so no rows are left behind.
+        const database = await unwrap(commands.checkDatabase());
+        if (cancelled) return;
+        if (!database.writeReadIntact) {
+          throw new Error("the database wrote, but what came back differed");
         }
-        setPeriksa(db);
+        setCheck(database);
 
-        await buka(commands.laporSinyal("data-bulat"));
-        if (batal) return;
-        tandai("data-bulat");
+        await unwrap(commands.reportSignal("data-roundtrip"));
+        if (cancelled) return;
+        mark("data-roundtrip");
 
-        // Sinyal 4 — hanya diminta kalau CI sengaja menjalankan aplikasi tanpa
-        // binary mesin. Gerbang Fase 2 menuntut jalur gagalnya diuji lebih dulu:
-        // pesannya harus menyebut penyebabnya, bukan gejala pembersihannya.
-        const harapan = await commands.harapanSmoke();
-        if (batal) return;
+        const expectations = await commands.smokeExpectations();
+        if (cancelled) return;
 
-        // Sinyal 5 — hanya diminta kalau CI meluncurkan aplikasi dengan tautan
-        // dalam. Registrasi skema URL tidak pernah diuji CI di Rantai sama
-        // sekali; ini bagian dengan ketidakpastian tertinggi di alur masuk.
-        if (harapan.tautan) {
-          await buktikanTautanSampai(harapan.tautan);
-          if (batal) return;
-          await buka(commands.laporSinyal("tautan-diterima"));
-          if (batal) return;
-          tandai("tautan-diterima");
+        // Signal 4 — only asked for when CI launches the application with a deep
+        // link. URL scheme registration was never covered by CI in Rantai at all.
+        if (expectations.deepLink) {
+          await proveDeepLinkArrived(expectations.deepLink);
+          if (cancelled) return;
+          await unwrap(commands.reportSignal("deep-link-received"));
+          if (cancelled) return;
+          mark("deep-link-received");
         }
 
-        // Sinyal 6 — Rilis 1 menuntut percakapan tersimpan dan bisa dibuka
-        // kembali. Itu hanya terbukti dengan dua kali menjalankan aplikasi:
-        // sekali menulis, sekali membaca sesudah prosesnya benar-benar mati.
-        if (harapan.simpan) {
-          await buktikanDataBertahan(harapan.simpan.mode, harapan.simpan.tanda);
-          if (batal) return;
-          await buka(commands.laporSinyal("data-bertahan"));
-          if (batal) return;
-          tandai("data-bertahan");
+        // Signal 5 — Release 1 promises a conversation is saved and can be
+        // reopened. That is only provable across two runs of the application.
+        if (expectations.persistence) {
+          await provePersistence(
+            expectations.persistence.mode,
+            expectations.persistence.marker,
+          );
+          if (cancelled) return;
+          await unwrap(commands.reportSignal("data-persisted"));
+          if (cancelled) return;
+          mark("data-persisted");
         }
 
-        if (harapan.mesinAbsen) {
-          await buktikanMesinAbsen();
-          if (batal) return;
-          await buka(commands.laporSinyal("mesin-absen-benar"));
-          if (batal) return;
-          tandai("mesin-absen-benar");
+        // Signal 6 — only asked for when CI deliberately runs without an engine
+        // binary. The Phase 2 gate wants the failure path tested first: the
+        // message must name the cause, not the cleanup symptom.
+        if (expectations.engineAbsent) {
+          await proveEngineAbsent();
+          if (cancelled) return;
+          await unwrap(commands.reportSignal("engine-absent-correct"));
+          if (cancelled) return;
+          mark("engine-absent-correct");
         }
       } catch (e) {
-        if (batal) return;
-        // Cetak seluruh rantainya, bukan hanya `message` — galat yang
-        // dilaporkan sering galat pembersihan, bukan penyebabnya.
-        setGalat(rantaiGalat(e));
+        if (cancelled) return;
+        // Print the whole chain, not just `message` — a reported error is often
+        // the cleanup error rather than its cause.
+        setError(errorChain(e));
       }
     })();
 
     return () => {
-      batal = true;
+      cancelled = true;
     };
   }, []);
 
   return (
     <main>
       <header>
-        <p className="label">Fase 3 · antarmuka dipindahkan</p>
+        <p className="label">Phase 3 · the interface is moving</p>
         <h1>Rantai</h1>
         <p className="lede">
-          Tulang punggung Rilis 1: membuka workspace, membuat sesi di dalamnya,
-          dan membuka kembali percakapan yang tersimpan. Panel di bawahnya masih
-          perkakas pembuktian, bukan tampilan akhir.
+          The Release 1 backbone: open a workspace, create a session inside it,
+          and reopen a saved conversation. The panels below it are still proving
+          tools, not the finished interface.
         </p>
       </header>
 
       {!tauri && (
         <div className="card">
-          <p className="label">Di luar Tauri</p>
+          <p className="label">Outside Tauri</p>
           <p style={{ margin: 0, color: "var(--muted)" }}>
-            Halaman ini dibuka di browser biasa, jadi tidak ada sisi Rust untuk
-            diajak bicara. Jalankan <code>bun run dev</code> dari akar repo untuk
-            membukanya di dalam jendela Tauri.
+            This page is open in an ordinary browser, so there is no Rust side to
+            talk to. Run <code>bun run dev</code> from the repository root to open
+            it inside a Tauri window.
           </p>
         </div>
       )}
 
-      {galat && (
+      {error && (
         <div className="card">
-          <p className="label">Galat</p>
-          <pre className="galat">{galat}</pre>
+          <p className="label">Error</p>
+          <pre className="error">{error}</pre>
         </div>
       )}
 
+      {tauri && <WorkspacePanel />}
+
+      {tauri && <DenPanel />}
+
+      {tauri && <EnginePanel workingDir={workingDir} />}
+
       {tauri && (
         <div className="card">
-          <p className="label">Sinyal</p>
-          <ul className="sinyal">
-            {SINYAL.map((nama) => {
-              const sudah = terkirim.includes(nama);
+          <p className="label">Signals</p>
+          <ul className="signals">
+            {SIGNALS.map((signal) => {
+              const done = sent.includes(signal);
               return (
-                <li key={nama}>
-                  <span className={sudah ? "pip ok" : "pip wait"}>
-                    {sudah ? "tiba" : "menunggu"}
+                <li key={signal}>
+                  <span className={done ? "pip ok" : "pip wait"}>
+                    {done ? "arrived" : "waiting"}
                   </span>
-                  {nama}
+                  {signal}
                 </li>
               );
             })}
@@ -167,42 +180,36 @@ export default function Beranda() {
         </div>
       )}
 
-      {periksa && (
+      {check && (
         <div className="card">
-          <p className="label">Basis data</p>
+          <p className="label">Database</p>
           <dl>
-            <dt>Tulis lalu baca</dt>
-            <dd>{periksa.tulisBacaUtuh ? "utuh" : "berbeda"}</dd>
-            <dt>Workspace</dt>
-            <dd>{periksa.jumlahWorkspace}</dd>
-            <dt>Sesi</dt>
-            <dd>{periksa.jumlahSesi}</dd>
-            <dt>Pesan</dt>
-            <dd>{periksa.jumlahPesan}</dd>
+            <dt>Write then read</dt>
+            <dd>{check.writeReadIntact ? "intact" : "differed"}</dd>
+            <dt>Workspaces</dt>
+            <dd>{check.workspaceCount}</dd>
+            <dt>Sessions</dt>
+            <dd>{check.sessionCount}</dd>
+            <dt>Messages</dt>
+            <dd>{check.messageCount}</dd>
           </dl>
         </div>
       )}
 
-      {tauri && <PanelRuang />}
-
-      {tauri && <PanelDen />}
-
-      {tauri && <PanelMesin dirKerja={dirKerja} />}
-
-      {sapaan && (
+      {greeting && (
         <div className="card">
-          <p className="label">Jawaban dari Rust</p>
+          <p className="label">Answer from Rust</p>
           <dl>
-            <dt>Pesan</dt>
-            <dd>{sapaan.pesan}</dd>
+            <dt>Message</dt>
+            <dd>{greeting.message}</dd>
             <dt>Platform</dt>
             <dd>
-              {sapaan.platform} · {sapaan.arsitektur}
+              {greeting.platform} · {greeting.arch}
             </dd>
             <dt>Tauri</dt>
-            <dd>{sapaan.versiTauri}</dd>
-            <dt>Aplikasi</dt>
-            <dd>{sapaan.versiAplikasi}</dd>
+            <dd>{greeting.tauriVersion}</dd>
+            <dt>Application</dt>
+            <dd>{greeting.appVersion}</dd>
           </dl>
         </div>
       )}
@@ -210,128 +217,131 @@ export default function Beranda() {
   );
 }
 
-/// Menulis data bertanda, atau membacanya kembali dan menuntut ia utuh.
+/// Writes marked data, or reads it back and demands it is intact.
 ///
-/// Dijalankan pada dua proses yang berbeda. Tes dalam satu proses bisa lulus
-/// sepenuhnya dari cache di memori tanpa satu byte pun menyentuh disk — dan
-/// "bisa dibuka kembali setelah aplikasi ditutup" adalah persis yang dijanjikan
-/// Rilis 1.
-async function buktikanDataBertahan(mode: string, tanda: string): Promise<void> {
-  const isiPesan = `isi-${tanda}`;
+/// Run across two different processes. A test inside one process can pass
+/// entirely from an in-memory cache without a single byte touching disk — and
+/// "can be reopened after the application closes" is exactly what Release 1
+/// promises.
+async function provePersistence(mode: string, marker: string): Promise<void> {
+  const content = `content-${marker}`;
 
-  if (mode === "tulis") {
-    const ws = await buka(commands.buatWorkspace(tanda, `/smoke/${tanda}`));
-    const sesi = await buka(commands.buatSesi(ws.id, tanda));
-    await buka(commands.tambahPesan(sesi.id, "pengguna", isiPesan));
+  if (mode === "write") {
+    const workspace = await unwrap(commands.createWorkspace(marker, `/smoke/${marker}`));
+    const session = await unwrap(commands.createSession(workspace.id, marker));
+    await unwrap(commands.addMessage(session.id, "user", content));
     return;
   }
 
-  const ws = (await buka(commands.daftarWorkspace())).find((w) => w.nama === tanda);
-  if (!ws) {
+  const workspace = (await unwrap(commands.listWorkspaces())).find(
+    (w) => w.name === marker,
+  );
+  if (!workspace) {
     throw new Error(
-      `workspace bertanda ${tanda} tidak ada sesudah aplikasi dijalankan ulang — ` +
-        "data tidak bertahan",
+      `no workspace marked ${marker} after the application was restarted — the data did not survive`,
     );
   }
 
-  const sesi = (await buka(commands.daftarSesi(ws.id))).find((s) => s.judul === tanda);
-  if (!sesi) {
-    throw new Error(`workspace bertahan tapi sesinya hilang: ${tanda}`);
+  const session = (await unwrap(commands.listSessions(workspace.id))).find(
+    (s) => s.title === marker,
+  );
+  if (!session) {
+    throw new Error(`the workspace survived but its session is gone: ${marker}`);
   }
 
-  const pesan = await buka(commands.daftarPesan(sesi.id));
-  const cocok = pesan.find((p) => p.isi === isiPesan);
-  if (!cocok) {
+  const messages = await unwrap(commands.listMessages(session.id));
+  const match = messages.find((m) => m.content === content);
+  if (!match) {
     throw new Error(
-      `sesi bertahan tapi pesannya hilang; yang ada: ${pesan.map((p) => p.isi).join(", ") || "(kosong)"}`,
+      `the session survived but its message is gone; what is there: ${
+        messages.map((m) => m.content).join(", ") || "(empty)"
+      }`,
     );
   }
-  if (cocok.peran !== "pengguna") {
-    throw new Error(`peran pesan berubah jadi ${cocok.peran}`);
+  if (match.role !== "user") {
+    throw new Error(`the message role changed to ${match.role}`);
   }
 }
 
-/// Membuktikan tautan dalam benar-benar sampai ke antarmuka, berikut grant yang
-/// benar.
+/// Proves a deep link really reached the interface, carrying the right grant.
 ///
-/// Ia membaca tautan peluncuran, bukan menunggu peristiwa: tautan yang
-/// *meluncurkan* aplikasi tiba sebelum halaman ini ada. Versi pertama kode ini
-/// kehilangannya sepenuhnya; versi kedua mengurasnya dan berebut dengan panel
-/// Den. Keduanya ketahuan dengan menjalankan, bukan dengan membaca.
-async function buktikanTautanSampai(grantDiharapkan: string): Promise<void> {
-  const urls = await commands.tautanPeluncuran();
+/// It reads the launch links rather than waiting for an event: the link that
+/// *launched* the application arrives before this page exists. The first version
+/// of this code lost it entirely; the second drained it and raced with the Den
+/// panel. Both were found by running, not by reading.
+async function proveDeepLinkArrived(expectedGrant: string): Promise<void> {
+  const urls = await commands.launchLinks();
 
   if (urls.length === 0) {
     throw new Error(
-      "tidak ada tautan dalam yang sampai — sistem tidak menyerahkannya, " +
-        "atau ia hilang sebelum antarmuka siap",
+      "no deep link arrived — the system never handed one over, or it was lost before the interface was ready",
     );
   }
 
-  const terurai = urls.map(uraiTautanMasuk).find((t) => t !== null);
-  if (!terurai) {
-    throw new Error(`tautan sampai tapi tidak terurai: ${urls.join(", ")}`);
+  const parsed = urls.map(parseAuthLink).find((p) => p !== null);
+  if (!parsed) {
+    throw new Error(`a link arrived but did not parse: ${urls.join(", ")}`);
   }
-  if (terurai.grant !== grantDiharapkan) {
+  if (parsed.grant !== expectedGrant) {
     throw new Error(
-      `grant yang sampai berbeda: ${terurai.grant} bukan ${grantDiharapkan}`,
+      `the grant that arrived differs: ${parsed.grant}, not ${expectedGrant}`,
     );
   }
 }
 
-/// Menyalakan mesin ketika binary-nya sengaja tidak ada, dan menuntut pesannya
-/// benar. Kalau ia justru berhasil menyala, itu berarti pengujiannya cacat —
-/// aplikasi menemukan OpenCode lain — dan itu harus menggagalkan smoke, bukan
-/// diam-diam lolos.
-async function buktikanMesinAbsen(): Promise<void> {
-  const hasil = await commands.nyalakanMesin(".");
+/// Starts the engine when its binary is deliberately absent, and demands the
+/// message is right. If it starts anyway, the check itself is flawed — the
+/// application found some other OpenCode — and that must fail the smoke run
+/// rather than quietly pass.
+async function proveEngineAbsent(): Promise<void> {
+  const outcome = await commands.startEngine(".");
 
-  if (hasil.status === "ok") {
+  if (outcome.status === "ok") {
     throw new Error(
-      "mesin justru menyala padahal binary-nya sengaja dihilangkan — " +
-        `ia menemukan ${hasil.data.jalurBinary} lewat ${hasil.data.sumber}. ` +
-        "Pengujiannya yang cacat, bukan aplikasinya.",
+      "the engine started even though its binary was deliberately removed — " +
+        `it found ${outcome.data.binaryPath} via ${outcome.data.source}. ` +
+        "The check is flawed, not the application.",
     );
   }
 
-  const pesan = hasil.error.pesan;
+  const message = outcome.error.message;
 
-  if (!pesan.includes("tidak ditemukan")) {
-    throw new Error(`pesan tidak menyebut inti persoalannya: ${pesan}`);
+  if (!message.includes("not found")) {
+    throw new Error(`the message does not name the problem: ${message}`);
   }
-  if (!pesan.includes("PATH")) {
-    throw new Error(`pesan tidak menyebut tempat yang sudah diperiksa: ${pesan}`);
+  if (!message.includes("PATH")) {
+    throw new Error(`the message does not say where it looked: ${message}`);
   }
 
-  // Yang paling mahal di Rantai: pesan yang berbicara tentang lapisan
-  // pembersihan sementara penyebabnya binary yang tidak ada.
-  for (const menyesatkan of ["SIGKILL", "signal", "exit code", "terminated"]) {
-    if (pesan.includes(menyesatkan)) {
+  // The costliest mistake in Rantai: a message talking about the cleanup layer
+  // when the cause was a missing binary.
+  for (const misleading of ["SIGKILL", "signal", "exit code", "terminated"]) {
+    if (message.includes(misleading)) {
       throw new Error(
-        `pesan menyebut "${menyesatkan}" padahal penyebabnya binary yang tidak ada: ${pesan}`,
+        `the message names "${misleading}" when the cause is a missing binary: ${message}`,
       );
     }
   }
 }
 
-function rantaiGalat(e: unknown): string {
-  const baris: string[] = [];
-  let kini: unknown = e;
-  let dalam = 0;
+function errorChain(e: unknown): string {
+  const lines: string[] = [];
+  let current: unknown = e;
+  let depth = 0;
 
-  while (kini != null && dalam < 8) {
-    if (kini instanceof Error) {
-      baris.push(kini.stack ?? `${kini.name}: ${kini.message}`);
-      if (kini instanceof AggregateError) {
-        for (const sub of kini.errors) baris.push(`  · ${rantaiGalat(sub)}`);
+  while (current != null && depth < 8) {
+    if (current instanceof Error) {
+      lines.push(current.stack ?? `${current.name}: ${current.message}`);
+      if (current instanceof AggregateError) {
+        for (const inner of current.errors) lines.push(`  · ${errorChain(inner)}`);
       }
-      kini = (kini as { cause?: unknown }).cause;
+      current = (current as { cause?: unknown }).cause;
     } else {
-      baris.push(typeof kini === "string" ? kini : JSON.stringify(kini));
-      kini = null;
+      lines.push(typeof current === "string" ? current : JSON.stringify(current));
+      current = null;
     }
-    dalam += 1;
+    depth += 1;
   }
 
-  return baris.join("\n\ndisebabkan oleh:\n");
+  return lines.join("\n\ncaused by:\n");
 }

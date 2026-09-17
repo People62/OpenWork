@@ -9,23 +9,35 @@ Den. Dua sentuhan native-nya — menerima `openwork://den-auth` dan membuka
 browser sistem — sudah berdiri dan **diuji di CI**, sesuatu yang tidak pernah
 tercakup di Rantai.
 
+## Bahasa
+
+Seluruh kode — nama, komentar, dan doc-comment — berbahasa Inggris. Dokumen ini
+dan pesan commit berbahasa Indonesia. Pemisahannya disengaja: doc-comment Rust
+ikut terbawa ke `bindings.ts` yang dihasilkan, jadi bahasa campur di dalam kode
+akan bocor ke berkas yang dihasilkan.
+
+Satu pengecualian yang disengaja: migrasi pertama di `src/db.rs` tetap memakai
+nama tabel dan kolom berbahasa Indonesia, karena ia sudah pernah dijalankan pada
+basis data yang beredar. Migrasi kedualah yang menggantinya. Migrasi yang
+disunting sesudah pernah berjalan di suatu tempat bukan lagi migrasi.
+
 ## Susunan
 
 ```
 apps/ui                    Next.js, App Router, output: 'export'
   app/bindings.ts          Dihasilkan dari Rust — jangan disunting tangan
   app/den/                 Alur masuk Den: pengurai tautan dan layarnya
-  app/ruang/               Workspace, sesi, dan percakapan tersimpan
+  app/workspace/           Workspace, sesi, dan percakapan tersimpan
 apps/desktop/src-tauri     Program Rust — cangkang Tauri sekaligus BE lokal
-  src/domain.rs            Workspace, sesi, pesan
+  src/domain.rs            Workspace, session, message
   src/db.rs                Koneksi SQLite dan migrasinya
-  src/perintah.rs          Perbatasan ke antarmuka — #[tauri::command]
-  src/galat.rs             Satu tipe galat untuk seluruh perbatasan
-  src/mesin/temukan.rs     Mencari binary OpenCode, dan menyebut di mana saja sudah dicari
-  src/mesin/mod.rs         Menyalakan, mengawasi, mematikan proses mesin
-  src/mesin/klien.rs       Bagian SDK yang dipakai, ditulis ulang terhadap HTTP API
-  src/percakapan.rs        Streaming token sebagai peristiwa, dan penghentiannya
-  src/tautan.rs            Deep link openwork:// dan membuka browser sistem
+  src/commands.rs          Perbatasan ke antarmuka — #[tauri::command]
+  src/error.rs             Satu tipe galat untuk seluruh perbatasan
+  src/engine/locate.rs     Mencari binary OpenCode, dan menyebut di mana saja sudah dicari
+  src/engine/mod.rs        Menyalakan, mengawasi, mematikan proses mesin
+  src/engine/client.rs     Bagian SDK yang dipakai, ditulis ulang terhadap HTTP API
+  src/conversation.rs      Streaming token sebagai peristiwa, dan penghentiannya
+  src/deeplink.rs          Deep link openwork:// dan membuka browser sistem
   src/smoke.rs             Mode pemeriksaan yang dipakai CI
 .github/workflows          Matriks tiga platform
 ```
@@ -76,12 +88,12 @@ yang pertama tidak:
 
 | Sinyal | Artinya kalau tiba |
 |---|---|
-| `webview-termuat` | Halaman termuat, bundel jalan, React ter-mount |
-| `ipc-bulat` | Jawaban Rust sampai ke layar, lalu kembali lagi ke Rust |
-| `data-bulat` | SQLite ditulis lalu dibaca kembali utuh |
-| `mesin-absen-benar` | Ketiadaan binary mesin menghasilkan pesan yang benar |
-| `tautan-diterima` | `openwork://den-auth` sampai ke layar dengan grant yang benar |
-| `data-bertahan` | Data ditulis, aplikasi ditutup, lalu dibaca kembali utuh |
+| `webview-loaded` | Halaman termuat, bundel jalan, React ter-mount |
+| `ipc-roundtrip` | Jawaban Rust sampai ke layar, lalu kembali lagi ke Rust |
+| `data-roundtrip` | SQLite ditulis lalu dibaca kembali utuh |
+| `engine-absent-correct` | Ketiadaan binary mesin menghasilkan pesan yang benar |
+| `deep-link-received` | `openwork://den-auth` sampai ke layar dengan grant yang benar |
+| `data-persisted` | Data ditulis, aplikasi ditutup, lalu dibaca kembali utuh |
 
 ```bash
 RANTAI_SMOKE=1 \

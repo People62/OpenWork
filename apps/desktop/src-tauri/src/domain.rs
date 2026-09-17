@@ -1,76 +1,75 @@
-// Model domain inti — padanan workspace, sesi, dan pesan.
+// The core domain model — the counterparts of workspace, session, and message.
 //
-// Ini tulang punggung Rilis 1 dan tidak lebih: membuka workspace, membuat sesi
-// di dalamnya, lalu satu percakapan yang tersimpan dan bisa dibuka kembali. MCP,
-// approvals, artifacts, skills, dan sisanya adalah daun pada tulang punggung
-// yang sama, dan tak satu pun menahannya.
+// This is the Release 1 backbone and no more: open a workspace, create a session
+// inside it, then hold one conversation that is saved and can be reopened. MCP,
+// approvals, artifacts, skills and the rest are leaves on the same trunk, and
+// not one of them holds it up.
 //
-// Setiap tipe di sini menurunkan `specta::Type`, dan dari situlah padanan
-// TypeScript-nya dihasilkan. Tidak ada tipe yang ditulis dua kali.
+// Every type here derives `specta::Type`, and that is where its TypeScript
+// counterpart comes from. No type is ever written twice.
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-/// Waktu disimpan sebagai milidetik Unix. SQLite tidak punya tipe waktu asli,
-/// dan integer menghindari seluruh urusan parsing zona waktu di perbatasan.
-pub type Milidetik = i64;
+/// Time is stored as Unix milliseconds. SQLite has no native time type, and an
+/// integer sidesteps the whole business of timezone parsing at the boundary.
+pub type Millis = i64;
 
-/// Specta menolak mengekspor i64 ke TypeScript karena `number` kehilangan
-/// presisi di atas 2^53, dan penolakan itu benar sebagai aturan umum. Milidetik
-/// Unix adalah pengecualiannya: sekitar 1,7 x 10^12, empat ribu kali di bawah
-/// batas itu, dan baru menyentuhnya pada tahun 287396. Jadi tiap medan waktu
-/// menyatakan sendiri bahwa ia aman sebagai `number` — bukan lewat saklar global
-/// yang diam-diam ikut melonggarkan i64 lain yang kelak ditambahkan.
+/// Specta refuses to export i64 to TypeScript because `number` loses precision
+/// above 2^53, and as a general rule that refusal is right. Unix milliseconds
+/// are the exception: around 1.7 x 10^12, four thousand times under the limit,
+/// and they only reach it in the year 287396. So each timestamp field declares
+/// for itself that it is safe as a `number` — rather than a global switch that
+/// would quietly loosen any other i64 added later.
 ///
-/// Dinyatakan `specta_typescript::Number`, bukan `f64`. Keduanya menjadi
-/// `number` di TypeScript, tapi `f64` menjadi `number | null` — karena JSON
-/// mengubah NaN dan Infinity jadi `null`, dan specta benar memperhitungkannya.
-/// Cap waktu tidak pernah NaN, jadi `| null` itu memaksa tiap pemakai menangani
-/// hal yang tidak mungkin terjadi. Kebohongan ke arah itu sama merugikannya.
-
+/// Declared as `specta_typescript::Number`, not `f64`. Both become `number` in
+/// TypeScript, but `f64` becomes `number | null` — because JSON turns NaN and
+/// Infinity into `null`, and specta is right to account for it. Timestamps are
+/// never NaN, so that `| null` forces every caller to handle something that
+/// cannot happen. A lie in that direction costs just as much.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Workspace {
     pub id: String,
-    pub nama: String,
-    /// Folder sungguhan di disk. Inilah yang membuat workspace bukan sekadar
-    /// baris basis data.
-    pub jalur: String,
+    pub name: String,
+    /// A real folder on disk. This is what makes a workspace more than a row in
+    /// a database.
+    pub path: String,
     #[specta(type = specta_typescript::Number)]
-    pub dibuat_pada: Milidetik,
+    pub created_at: Millis,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct Sesi {
+pub struct Session {
     pub id: String,
     pub workspace_id: String,
-    pub judul: String,
+    pub title: String,
     #[specta(type = specta_typescript::Number)]
-    pub dibuat_pada: Milidetik,
+    pub created_at: Millis,
     #[specta(type = specta_typescript::Number)]
-    pub diperbarui_pada: Milidetik,
+    pub updated_at: Millis,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
-pub enum Peran {
-    Pengguna,
-    Asisten,
+pub enum Role {
+    User,
+    Assistant,
 }
 
-impl Peran {
-    pub fn sebagai_teks(self) -> &'static str {
+impl Role {
+    pub fn as_text(self) -> &'static str {
         match self {
-            Peran::Pengguna => "pengguna",
-            Peran::Asisten => "asisten",
+            Role::User => "user",
+            Role::Assistant => "assistant",
         }
     }
 
-    pub fn dari_teks(teks: &str) -> Option<Self> {
-        match teks {
-            "pengguna" => Some(Peran::Pengguna),
-            "asisten" => Some(Peran::Asisten),
+    pub fn from_text(text: &str) -> Option<Self> {
+        match text {
+            "user" => Some(Role::User),
+            "assistant" => Some(Role::Assistant),
             _ => None,
         }
     }
@@ -78,11 +77,11 @@ impl Peran {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct Pesan {
+pub struct Message {
     pub id: String,
-    pub sesi_id: String,
-    pub peran: Peran,
-    pub isi: String,
+    pub session_id: String,
+    pub role: Role,
+    pub content: String,
     #[specta(type = specta_typescript::Number)]
-    pub dibuat_pada: Milidetik,
+    pub created_at: Millis,
 }

@@ -1,0 +1,211 @@
+# Installers that can genuinely be installed, from every state of main.
+#
+# This is what makes the Phase 3 gate workable: "used for real work for a week"
+# needs an installed application, not a CI artifact that expires in 90 days.
+#
+# Two kinds of output:
+#
+#   push to main  -> a rolling pre-release `main-terbaru` whose assets are
+#                    replaced on every merge. Always points at the latest main.
+#   tag v*        -> a real release under that tag, never overwritten.
+#
+# The overlap with "Skeleton · three platforms" is deliberate. That one is the
+# gate that blocks merges; this one publishes. Both build the same commit, and a
+# public repository pays nothing for Actions minutes — so the clarity is free.
+#
+# Nothing is published without being run first: every runner runs the
+# application in smoke mode before its installer goes up to Releases.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Successive merges need not wait for each other, and finishing an older one is
+# pointless — its assets would be overwritten by the newer run immediately.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: "1.4.0"
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: Linux
+          - os: macos-14
+            label: macOS
+          - os: windows-latest
+            label: Windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install the Linux webview and display
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xvfb
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build the interface
+        working-directory: apps/ui
+        run: bun run build
+
+      - name: Make sure the interface really exported
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f apps/ui/out/index.html \
+            || { echo "apps/ui/out/index.html tidak ada — next build tidak menghasilkan apa pun"; exit 1; }
+
+      - name: Build the installer
+        working-directory: apps/desktop
+        run: bun run tauri build
+
+      # The binary under test must be the one produced by `tauri build` above.
+      # The debug or release profile is not what decides it: a plain
+      # `cargo build --release` still produces a dev context and loads devUrl
+      # rather than the embedded export.
+      - name: Run the webview check before publishing
+        shell: bash
+        env:
+          RANTAI_SMOKE: "1"
+          RANTAI_SMOKE_TIMEOUT_MS: "120000"
+        run: |
+          set -euo pipefail
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke.json"
+
+          case "${RUNNER_OS}" in
+            Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
+            macOS)   binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai" ;;
+            *)       binary=apps/desktop/src-tauri/target/release/rantai ;;
+          esac
+          test -x "${binary}" || { echo "binary missing at ${binary}"; exit 1; }
+
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            xvfb-run -a "${binary}"
+          else
+            "${binary}"
+          fi
+
+      - name: Collect the installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          bundle=apps/desktop/src-tauri/target/release/bundle
+          test -d "${bundle}" || { echo "no bundle directory"; exit 1; }
+
+          find "${bundle}" -type f \
+            \( -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) \
+            -exec cp {} output/ \;
+
+          count=$(find output -type f | wc -l)
+          test "${count}" -gt 0 || { echo "no installers were collected"; exit 1; }
+          echo "collected ${count} installers:"
+          ls -lh output
+
+      - name: Upload for the publishing stage
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: output/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish to Releases
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Ambil semua installer
+        uses: actions/download-artifact@v4
+        with:
+          path: output
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ls -lh output
+          test -n "$(ls -A output)" || { echo "nothing to publish"; exit 1; }
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            # A real release. Never deleted and never moved.
+            tag="${GITHUB_REF#refs/tags/}"
+            title="Rantai ${tag}"
+            notes="Release ${tag}."
+            prerelease=""
+          else
+            # A rolling pre-release. The old tag is dropped along with its
+            # release so that it really points at the latest commit, not the
+            # first one that ever created it.
+            tag="main-terbaru"
+            title="Rantai — latest main"
+            notes="Built automatically from main @ ${GITHUB_SHA}. Unsigned: Windows shows a SmartScreen warning, and macOS blocks it through Gatekeeper until it is opened with a right-click."
+            prerelease="--prerelease"
+            gh release delete "${tag}" --yes --cleanup-tag 2>/dev/null || true
+          fi
+
+          if ! gh release view "${tag}" >/dev/null 2>&1; then
+            # shellcheck disable=SC2086
+            gh release create "${tag}" \
+              --target "${GITHUB_SHA}" \
+              --title "${title}" \
+              --notes "${notes}" \
+              ${prerelease}
+          fi
+
+          gh release upload "${tag}" output/* --clobber
+
+          echo "### Published: ${title}" >> "${GITHUB_STEP_SUMMARY}"
+          gh release view "${tag}" --json assets \
+            --jq '.assets[] | "  \(.name)  \(.size/1048576 | floor)MB"' >> "${GITHUB_STEP_SUMMARY}"

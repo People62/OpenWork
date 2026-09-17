@@ -3,12 +3,12 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Rantai",
-  description: "Fase 0 — kerangka yang berjalan.",
+  description: "A desktop application with a Rust local backend inside Tauri.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="id">
+    <html lang="en">
       <body>{children}</body>
     </html>
   );

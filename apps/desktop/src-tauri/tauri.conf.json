@@ -15,7 +15,7 @@
   "app": {
     "windows": [
       {
-        "label": "utama",
+        "label": "main",
         "title": "Rantai",
         "width": 1100,
         "height": 760,
