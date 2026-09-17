@@ -14,3 +14,4 @@ apps/desktop/src-tauri/gen/schemas/
 # Mesin OpenCode: 176 MB, diunduh oleh scripts/prepare-sidecar.mjs dan
 # diverifikasi terhadap sha256 yang dipatok di apps/desktop/opencode.json.
 apps/desktop/src-tauri/binaries/
+.shots/
