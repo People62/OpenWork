@@ -446,6 +446,22 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # This job compiles the crate too, and the Tauri build script refuses to
+      # run when a declared resource is missing: "resource path
+      # `binaries/opencode` doesn't exist". So even the cheap job needs the
+      # engine present. Cached, so it is fetched once per version and platform.
+      - name: Cache the OpenCode engine
+        id: engine-cache
+        uses: actions/cache@v4
+        with:
+          path: apps/desktop/src-tauri/binaries
+          key: opencode-${{ hashFiles('apps/desktop/opencode.json') }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Fetch the OpenCode engine
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        working-directory: apps/desktop
+        run: bun run sidecar
+
       - name: Rust formatting
         working-directory: apps/desktop/src-tauri
         run: cargo fmt --check
