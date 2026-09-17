@@ -109,12 +109,14 @@ const stubSource = (await readFile(join(here, "contrast-audit.mjs"), "utf8"))
   .split("const TAURI_STUB = `")[1]
   .split("`;")[0];
 
+// Rows are found by `data-row` so a change of shape cannot quietly take the
+// pictures of an empty screen instead.
 const REACH = {
   "/": `(async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    document.querySelector("aside ul li button")?.click();
+    document.querySelector('[data-row="workspace"]')?.click();
     await wait(400);
-    document.querySelectorAll("aside ul")[1]?.querySelector("li button")?.click();
+    document.querySelector('[data-row="session"]')?.click();
     await wait(400);
   })()`,
 };

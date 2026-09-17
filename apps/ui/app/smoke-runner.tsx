@@ -2,6 +2,11 @@
 
 import { useEffect } from "react";
 import { commands, insideTauri, unwrap } from "./tauri";
+import { installDevMock } from "./dev-mock";
+
+// At module scope, not in an effect: every screen checks whether it is inside
+// Tauri while it mounts, and an effect would run too late.
+installDevMock();
 import { parseAuthLink } from "./den/links";
 
 /// Runs the smoke checks, and renders nothing.

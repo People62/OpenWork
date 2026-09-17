@@ -33,21 +33,24 @@ const themes = ["light", "dark"];
 
 // Reaching the screen that matters.
 //
-// The workspace opens on an empty state, which is seven text nodes and none of
-// the interface anyone uses. Clicking through to a conversation is what puts the
-// message list, the composer and the session list on screen where they can be
-// measured.
-const REACH = {
-  "/": `(async () => {
+// The workspace opens on an empty state, which is a handful of text nodes and
+// none of the interface anyone uses. Clicking through to a conversation is what
+// puts the message list, the composer and the session list on screen where they
+// can be measured.
+//
+// The rows are found by `data-row`, not by shape. The first version walked
+// `aside ul li button`, and the day the sidebar stopped being a list of lists it
+// would have silently measured the empty state instead — which is exactly the
+// failure that made this audit report six text nodes the first time it ran.
+const REACH_SOURCE = `(async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    const first = (sel) => document.querySelector(sel);
-    first("aside ul li button")?.click();
+    document.querySelector('[data-row="workspace"]')?.click();
     await wait(400);
-    const lists = document.querySelectorAll("aside ul");
-    lists[1]?.querySelector("li button")?.click();
+    document.querySelector('[data-row="session"]')?.click();
     await wait(400);
-  })()`,
-};
+  })()`;
+
+const REACH = { "/": REACH_SOURCE };
 
 const TYPES = {
   ".html": "text/html",

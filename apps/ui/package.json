@@ -8,7 +8,8 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "bun test",
     "audit": "node scripts/audit.mjs",
-    "shot": "node scripts/shot.mjs"
+    "shot": "node scripts/shot.mjs",
+    "dev:mock": "NEXT_PUBLIC_RANTAI_MOCK=1 next dev -p 3000"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
