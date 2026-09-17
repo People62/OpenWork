@@ -72,6 +72,7 @@ fn pembangun() -> Builder<tauri::Wry> {
             percakapan::status_mesin,
             percakapan::nyalakan_mesin,
             percakapan::matikan_mesin,
+            percakapan::daftar_model,
             percakapan::buat_sesi_mesin,
             percakapan::kirim_prompt,
             percakapan::hentikan_percakapan,

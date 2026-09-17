@@ -12,6 +12,7 @@ export type {
   Galat,
   GalatMesin,
   Kepingan,
+  Model,
   Peran,
   PeriksaDb,
   Pesan,

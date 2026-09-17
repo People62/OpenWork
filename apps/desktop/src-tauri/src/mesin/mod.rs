@@ -432,12 +432,12 @@ mod tes_proses {
     }
 
     #[cfg(unix)]
-    fn proses_masih_ada(pid: u32) -> bool {
+    pub(super) fn proses_masih_ada(pid: u32) -> bool {
         Path::new(&format!("/proc/{pid}")).exists()
     }
 
     #[cfg(not(unix))]
-    fn proses_masih_ada(_pid: u32) -> bool {
+    pub(super) fn proses_masih_ada(_pid: u32) -> bool {
         false
     }
 
@@ -454,5 +454,160 @@ mod tes_proses {
         let hasil = mesin.nyalakan(dir_kerja, None).await;
         unsafe { std::env::remove_var(temukan::ENV_TIMPA) };
         hasil
+    }
+}
+
+#[cfg(test)]
+mod tes_percakapan {
+    use super::*;
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    /// Gerbang Fase 2, diuji lewat kode kita sendiri terhadap model sungguhan.
+    ///
+    /// Hanya berjalan kalau `RANTAI_OPENCODE_TES` menunjuk binary **dan**
+    /// `RANTAI_MODEL_TES` menyebut model dalam bentuk `providerID/id`. Tanpa
+    /// keduanya ia lewat sambil mengatakannya — berpura-pura menguji adalah
+    /// kegagalan yang lebih buruk daripada tidak menguji.
+    ///
+    /// Direktori kerjanya penting: ketersediaan provider di OpenCode bergantung
+    /// padanya. Dijalankan di akar repo, yang dikenali sebagai proyek.
+    #[tokio::test]
+    async fn percakapan_penuh_mengalir_lalu_bisa_dihentikan() {
+        let (Some(binary), Some(model_teks)) = (
+            std::env::var_os("RANTAI_OPENCODE_TES").map(PathBuf::from),
+            std::env::var("RANTAI_MODEL_TES").ok(),
+        ) else {
+            eprintln!("dilewati: RANTAI_OPENCODE_TES dan RANTAI_MODEL_TES belum disetel");
+            return;
+        };
+        if !binary.is_file() {
+            eprintln!("dilewati: binary tes tidak ada");
+            return;
+        }
+        let (provider_id, model_id) = model_teks
+            .split_once('/')
+            .expect("RANTAI_MODEL_TES harus berbentuk providerID/modelID");
+        let model = klien::Model {
+            provider_id: provider_id.to_string(),
+            id: model_id.to_string(),
+        };
+
+        // Akar repo: dua tingkat di atas src-tauri.
+        let akar = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .expect("akar repo tidak ketemu");
+
+        let mesin = Mesin::default();
+        // SAFETY: tes ini dijalankan berurutan lewat --test-threads=1.
+        unsafe { std::env::set_var(temukan::ENV_TIMPA, &binary) };
+        let status = mesin
+            .nyalakan(&akar, None)
+            .await
+            .expect("mesin seharusnya menyala");
+        unsafe { std::env::remove_var(temukan::ENV_TIMPA) };
+
+        let klien = klien::Klien::baru(status.alamat.clone().expect("alamat"));
+
+        // Model harus benar-benar tersedia; kalau tidak, kegagalannya nanti
+        // tidak muncul di aliran peristiwa sama sekali — hanya di log mesin.
+        let tersedia = klien.daftar_model().await.expect("daftar model");
+        assert!(
+            tersedia
+                .iter()
+                .any(|m| m.provider_id == model.provider_id && m.id == model.id),
+            "model {model_teks} tidak tersedia di {}; yang ada: {:?}",
+            akar.display(),
+            tersedia.iter().take(5).collect::<Vec<_>>()
+        );
+
+        let sesi = klien
+            .buat_sesi(Some(&model))
+            .await
+            .expect("membuat sesi gagal");
+
+        let terkumpul: Arc<StdMutex<Vec<klien::Kepingan>>> = Arc::default();
+        let (kirim_batal, terima_batal) = tokio::sync::watch::channel(false);
+
+        let aliran_klien = klien.clone();
+        let aliran_sesi = sesi.id.clone();
+        let aliran_kumpul = terkumpul.clone();
+        let tugas = tokio::spawn(async move {
+            aliran_klien
+                .alirkan(&aliran_sesi, terima_batal, move |k| {
+                    aliran_kumpul.lock().expect("kumpulan teracuni").push(k);
+                })
+                .await
+        });
+
+        // Beri aliran sesaat untuk terbuka sebelum prompt dikirim.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        klien
+            .kirim_prompt(&sesi.id, "Hitung dari 1 sampai 40, satu angka per baris.")
+            .await
+            .expect("prompt ditolak");
+
+        // Tunggu token sungguhan mulai mengalir.
+        let mulai = Instant::now();
+        loop {
+            let ada_delta = terkumpul
+                .lock()
+                .expect("kumpulan teracuni")
+                .iter()
+                .any(|k| k.jenis.contains("delta"));
+            if ada_delta {
+                break;
+            }
+            assert!(
+                mulai.elapsed() < Duration::from_secs(90),
+                "tidak ada satu pun token dalam 90 detik; peristiwa yang tiba: {:?}",
+                terkumpul
+                    .lock()
+                    .expect("kumpulan teracuni")
+                    .iter()
+                    .map(|k| k.jenis.clone())
+                    .collect::<Vec<_>>()
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        // Hentikan di tengah — inilah yang menutup gerbangnya.
+        klien.hentikan(&sesi.id).await.expect("interrupt gagal");
+        let _ = kirim_batal.send(true);
+
+        let selesai = tokio::time::timeout(Duration::from_secs(30), tugas).await;
+        assert!(
+            selesai.is_ok(),
+            "aliran tidak berhenti dalam 30 detik sesudah dihentikan"
+        );
+
+        // Kunci dilepas sebelum `await` berikutnya. MutexGuard sinkron yang
+        // dipegang melewati titik await bisa membuat runtime terkunci — clippy
+        // menangkapnya, dan ia benar.
+        let (jumlah, jenis, semua_milik_sesi) = {
+            let kumpulan = terkumpul.lock().expect("kumpulan teracuni");
+            (
+                kumpulan.len(),
+                kumpulan
+                    .iter()
+                    .map(|k| k.jenis.clone())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                kumpulan
+                    .iter()
+                    .all(|k| k.sesi_mesin_id.as_deref() == Some(sesi.id.as_str())),
+            )
+        };
+        assert!(
+            semua_milik_sesi,
+            "ada peristiwa milik sesi lain yang lolos saringan"
+        );
+        eprintln!("percakapan: {jumlah} peristiwa, jenis: {jenis:?}");
+
+        let pid = mesin.hidup.lock().await.as_ref().and_then(|h| h.anak.id());
+        mesin.matikan().await.expect("mematikan gagal");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if let Some(pid) = pid {
+            assert!(!tes_proses::proses_masih_ada(pid), "proses {pid} yatim");
+        }
     }
 }

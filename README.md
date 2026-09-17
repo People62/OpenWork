@@ -106,6 +106,39 @@ langsung membedakan "salah build" dari "benar-benar rusak". Yang benar terbaca
 
 ## Mesin OpenCode
 
+### Model harus ditanyakan, tidak pernah ditebak
+
+Ketersediaan provider di OpenCode **bergantung pada direktori kerja mesin**.
+Folder yang sama bisa punya puluhan model atau nol, tergantung apakah OpenCode
+mengenalinya sebagai proyek. Diukur di mesin pengembangan: akar repo ini
+memberi 31 model, `~` memberi nol.
+
+Model juga harus ditetapkan pada **sesinya**, bukan pada prompt — skema
+`/prompt` tidak punya medan model sama sekali, dan menyelipkannya di sana
+diabaikan diam-diam. Sesi tanpa model jatuh ke bawaan mesin, dan kalau bawaan
+itu tidak bisa dipakai, **kegagalannya tidak muncul di aliran peristiwa sama
+sekali** — hanya di log mesin. Antarmuka akan tampak menggantung tanpa sebab.
+
+Kredensial provider dibaca dari lingkungan proses mesin, misalnya
+`MINIMAX_API_KEY`. Karena mesin adalah proses anak, ia mewarisi lingkungan
+aplikasi.
+
+### Token mengalir dari `/api/event`, bukan dari aliran sesi
+
+OpenCode punya dua aliran, dan perbedaannya baru terlihat saat dijalankan:
+
+| Aliran | Isi |
+|---|---|
+| `/api/session/{id}/event` | durable dan kasar — `text.started` lalu `text.ended`, tanpa token |
+| `/api/event` | membawa `session.next.text.delta` dan `reasoning.delta` |
+
+Satu percakapan yang sama menghasilkan **8 peristiwa** di aliran per-sesi dan
+**63** di aliran global. Karena itu klien memakai aliran global dan menyaring
+berdasarkan `sessionID`.
+
+Aliran ini juga **tidak mengirim baris `event:` sama sekali** — hanya `data:`,
+dengan jenis peristiwa di dalam JSON-nya sebagai medan `type`.
+
 Binary-nya tidak ikut di dalam repo — 176 MB, dan diunduh terpisah. Untuk
 menjalankannya dari sini, arahkan saja:
 
