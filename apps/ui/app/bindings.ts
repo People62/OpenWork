@@ -249,7 +249,8 @@ export type Session = {
  */
 export type SmokeExpectations = {
 	enabled: boolean,
-	engineAbsent: boolean,
+	/**  "absent" or "present", when CI asks for either. */
+	engine: string | null,
 	/**
 	 *  When set, the interface must prove this grant is the one that arrived by
 	 *  deep link.

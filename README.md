@@ -118,6 +118,32 @@ langsung membedakan "salah build" dari "benar-benar rusak". Yang benar terbaca
 
 ## Mesin OpenCode
 
+Binary-nya diunduh oleh `apps/desktop/scripts/prepare-sidecar.mjs` dan
+**diverifikasi terhadap sha256 yang dipatok** di `apps/desktop/opencode.json`.
+Ketidakcocokan menghentikan build.
+
+```bash
+bun run sidecar     # unduh, verifikasi, taruh di src-tauri/binaries/
+```
+
+Implementasi rujukan menghitung hash lalu mencatatnya sesudahnya, tapi tidak
+pernah membandingkannya dengan nilai yang diketahui — jadi unduhan 176 MB itu
+terverifikasi terhadap tidak apa-apa selain URL asalnya. Lubang itu ditutup di
+sini.
+
+### Mesin dikirim sebagai resource, bukan externalBin
+
+Keputusan ini diambil dengan mencoba keduanya. Sebagai `externalBin` ia mendarat
+di `usr/bin` bersebelahan dengan aplikasi — dan `linuxdeploy`, saat membangun
+AppImage, menjalankan `patchelf` pada tiap ELF yang ditemukannya di sana. Itu
+**merusak** OpenCode: salinan di dalam AppDir menghasilkan core dump, dan
+linuxdeploy berhenti dengan "Failed to run ldd".
+
+Sebagai resource ia mendarat di direktori resource, yang tidak diperlakukan
+begitu, dan bit eksekusinya tetap utuh. Diukur pada `.deb`: salinannya
+byte-identik dengan aslinya dan menjawab `--version` dengan benar.
+
+
 ### Model harus ditanyakan, tidak pernah ditebak
 
 Ketersediaan provider di OpenCode **bergantung pada direktori kerja mesin**.

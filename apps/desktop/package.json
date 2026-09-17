@@ -5,8 +5,9 @@
   "scripts": {
     "dev": "tauri dev",
     "build:ui": "cd ../ui && bun run build",
-    "build": "bun run build:ui && tauri build",
-    "tauri": "tauri"
+    "build": "bun run sidecar && bun run build:ui && tauri build",
+    "tauri": "tauri",
+    "sidecar": "node scripts/prepare-sidecar.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

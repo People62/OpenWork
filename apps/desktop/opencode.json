@@ -1,0 +1,29 @@
+{
+  "_comment": [
+    "The OpenCode engine the application ships with.",
+    "",
+    "Every archive is pinned by sha256. The reference implementation computes a",
+    "hash and records it afterwards, but never compares it against a known value —",
+    "so a 176 MB download is verified against nothing but the URL it came from.",
+    "That gap is closed here: a mismatch stops the build.",
+    "",
+    "To move to a new version: change `version`, run the script once per target",
+    "with RANTAI_SIDECAR_PRINT_HASH=1, and paste the hashes it prints."
+  ],
+  "repo": "anomalyco/opencode",
+  "version": "v1.18.18",
+  "assets": {
+    "x86_64-unknown-linux-gnu": {
+      "file": "opencode-linux-x64-baseline.tar.gz",
+      "sha256": "05914655854c1dab48f0d52a8af8f74967e4e26daf87dfe6534f57e799a853d7"
+    },
+    "aarch64-apple-darwin": {
+      "file": "opencode-darwin-arm64.zip",
+      "sha256": "7d668bf26496fec8686d4e51ebb1ac2bd2e393f0c1620aa696c4c242a9e5806a"
+    },
+    "x86_64-pc-windows-msvc": {
+      "file": "opencode-windows-x64-baseline.zip",
+      "sha256": "66ad3d31bdc48d7cf16e212da21449bdfe34656cf83a56f682a211c8b78d30ba"
+    }
+  }
+}
