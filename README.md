@@ -206,6 +206,26 @@ pengawas mode smoke. Ini ditemukan dengan mendaftar proses sesudah percobaan,
 bukan dengan membaca kode: versi pertamanya meninggalkan OpenCode hidup dan
 dipungut `init`.
 
+## Bentuk CI
+
+Satu perubahan yang di-merge memicu **dua** putaran tiga platform, bukan tiga:
+
+| Kapan | Apa |
+|---|---|
+| Pull request | matriks tiga platform + typecheck, clippy, tes |
+| Merge ke main | workflow rilis: bangun, jalankan, terbitkan installer |
+
+Matriks tidak lagi berjalan sesudah merge. Proteksi cabang menuntut PR hijau
+*dan* mutakhir terhadap main, jadi hasil merge-nya adalah commit yang sudah
+diuji — menjalankannya lagi tidak memberi tahu siapa pun apa pun.
+
+Tiap job platform menjalankan aplikasi **tiga kali**, bukan tujuh. Tiap
+peluncuran memancarkan tiga sinyal inti, jadi peluncuran yang hanya memeriksa
+itu adalah pengulangan belaka. Dan harapannya menumpuk: satu proses bisa diminta
+membuktikan mesin menyala dari bundel, tautan dalam sampai, dan data tertulis —
+sekaligus. Hanya dua hal yang benar-benar butuh prosesnya sendiri: membaca data
+kembali sesudah yang pertama mati, dan berjalan tanpa mesinnya.
+
 ## Tersimpan dan bisa dibuka kembali
 
 Rilis 1 menjanjikan percakapan "tersimpan di SQLite dan bisa dibuka kembali".
