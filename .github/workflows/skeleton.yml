@@ -349,12 +349,12 @@ jobs:
 
   # Cheap, fast, and catches a different class of error than the matrix above.
   #
-  # NOTE: this job is still named in Indonesian. Renaming it would break branch
-  # protection, which matches required checks by name — every open PR would wait
-  # forever for a check that no longer reports. Rename it and update the required
-  # contexts in the same move, with no PR open.
+  # NOTE: branch protection matches required checks by name. Renaming this job
+  # means every open PR would wait forever for a check that no longer reports —
+  # so a rename has to happen with no PR open, and the required contexts have to
+  # be updated in the same move.
   checks:
-    name: Typecheck dan lint
+    name: Typecheck and lint
     runs-on: ubuntu-22.04
     timeout-minutes: 20
 
