@@ -127,7 +127,14 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: bun run tauri build
+        # createUpdaterArtifacts lives here rather than in tauri.conf.json.
+        #
+        # With it in the config, *every* build demands the signing key —
+        # including the gate workflow on every pull request, which failed on all
+        # three platforms with "A public key has been found, but no private key".
+        # Updater artifacts are only needed when publishing, so the key only ever
+        # needs to reach this workflow.
+        run: bun run tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
       # The binary under test must be the one produced by `tauri build` above.
       # The debug or release profile is not what decides it: a plain
@@ -255,49 +262,65 @@ jobs:
           # it — every single time it checked.
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
           python3 - "${tag}" "${GITHUB_SHA}" <<'PY'
-          import json, os, sys, pathlib
+          import json, os, sys, pathlib, datetime
 
           tag, sha = sys.argv[1], sys.argv[2]
           version = tag[1:] if tag.startswith("v") else "0.0.0"
           base = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{tag}"
 
-          # Tauri's platform keys, and the artifact suffix each one expects.
-          wanted = {
-              "linux-x86_64": ".AppImage.tar.gz",
-              "darwin-aarch64": ".app.tar.gz",
-              "windows-x86_64": ".nsis.zip",
-          }
+          # Artifacts are discovered from the .sig files that actually exist, not from a
+          # table of expected names.
+          #
+          # The table was wrong on its first contact with reality: it expected
+          # `.AppImage.tar.gz` for Linux, which is the Tauri v1 convention. Tauri 2 signs
+          # the .AppImage itself. Having been wrong about one platform, the entries for the
+          # other two were no more trustworthy — and neither could be checked from a Linux
+          # machine.
+          def platform_for(name):
+              if name.endswith(".AppImage"):
+                  return "linux-x86_64"
+              if name.endswith(".app.tar.gz"):
+                  return "darwin-aarch64"
+              if name.endswith(".nsis.zip") or name.endswith("-setup.exe"):
+                  return "windows-x86_64"
+              return None
 
           out = pathlib.Path("output")
           platforms = {}
-          for key, suffix in wanted.items():
-              archive = next((f for f in out.iterdir() if f.name.endswith(suffix)), None)
-              if archive is None:
-                  print(f"latest.json: no {suffix} — skipping {key}")
+          for signature in sorted(out.glob("*.sig")):
+              artifact = out / signature.name[: -len(".sig")]
+              if not artifact.exists():
+                  print(f"latest.json: {signature.name} has no artifact beside it — skipping")
                   continue
-              signature = out / f"{archive.name}.sig"
-              if not signature.exists():
-                  print(f"latest.json: {archive.name} has no .sig — skipping {key}")
+              key = platform_for(artifact.name)
+              if key is None:
+                  print(f"latest.json: {artifact.name} is signed but not an update target — skipping")
+                  continue
+              if key in platforms:
+                  print(f"latest.json: more than one candidate for {key}; keeping the first")
                   continue
               platforms[key] = {
                   "signature": signature.read_text().strip(),
-                  "url": f"{base}/{archive.name}",
+                  "url": f"{base}/{artifact.name}",
               }
 
           if not platforms:
+              # An empty manifest would be worse than none: the application would find an
+              # update, download nothing, and report a failure on every check.
               print("latest.json: no signed artifacts at all — not writing a manifest")
               sys.exit(0)
+
+          for missing in {"linux-x86_64", "darwin-aarch64", "windows-x86_64"} - set(platforms):
+              print(f"latest.json: nothing for {missing} — that platform gets no update")
 
           manifest = {
               "version": version,
               "notes": f"Built from {sha[:9]}.",
-              "pub_date": __import__("datetime").datetime.now(
-                  __import__("datetime").timezone.utc
-              ).isoformat(),
+              "pub_date": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "platforms": platforms,
           }
           (out / "latest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-          print(f"latest.json: {', '.join(platforms)}")
+          print(f"latest.json: {', '.join(sorted(platforms))}")
           PY
           else
             echo "latest.json: skipped — the rolling build cannot drive updates"
