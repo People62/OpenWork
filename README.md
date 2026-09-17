@@ -21,6 +21,40 @@ nama tabel dan kolom berbahasa Indonesia, karena ia sudah pernah dijalankan pada
 basis data yang beredar. Migrasi kedualah yang menggantinya. Migrasi yang
 disunting sesudah pernah berjalan di suatu tempat bukan lagi migrasi.
 
+## Sistem desain
+
+Token warna, tipografi, dan 42 komponen antarmuka dipindahkan dari OpenWork.
+`colors.css` dan `tailwind-theme.css` disalin tanpa perubahan sama sekali — ia
+lapisan token, dan menyuntingnya di sini berarti dua definisi untuk palet yang
+sama.
+
+Tidak satu pun dari 42 komponen itu menyentuh `fetch`, `/api/`, atau
+`invokeDesktop`. Itulah sebabnya rupanya bisa pindah lebih dulu, jauh sebelum BE
+Rust tumbuh cukup untuk layar-layar yang memakainya.
+
+Yang belum ikut: 91 berkas antarmuka rujukan yang memanggil BE lokal lewat HTTP.
+Menyalin layar yang memanggil perintah yang tidak ada hanya menghasilkan layar
+yang rusak.
+
+### Memeriksa tampilan
+
+```bash
+bun run audit    # kontras WCAG AA, tiap rute, kedua tema
+bun run shot     # tangkapan layar ke .shots/
+```
+
+Perubahan tampilan adalah satu-satunya jenis perubahan yang tidak bisa diperiksa
+suite tes. Audit dijalankan terhadap hasil export di Chrome headless — Tauri
+memakai webview sistem dan tidak satu pun dari ketiganya berbicara CDP, tapi yang
+diukur adalah lembar gayanya, dan itu sama saja.
+
+Audit ini langsung menemukan dua pelanggaran nyata pada hari ia dipasang: teks
+teredam pada baris terpilih jatuh ke 4,29:1, kurang dari 4,5:1 yang dituntut AA.
+Tokennya benar; permukaannya yang salah — `--dls-active` adalah `tinted-5`,
+langkah yang diperuntukkan sebagai latar komponen, bukan untuk dipasangi teks
+langkah 11. Penanda terpilih kini garis di tepi kiri, bukan latar yang lebih
+gelap.
+
 ## Susunan
 
 ```
