@@ -244,6 +244,21 @@ bukan sebagai antrean yang dikuras. Versi pertama kehilangannya sama sekali;
 versi kedua mengurasnya dan dua pembaca saling mendahului. Keduanya ketahuan
 dengan menjalankan, bukan dengan membaca.
 
+### Pendaftaran skema saat aplikasi dijalankan
+
+Aplikasi mendaftarkan `openwork://` saat start, dan hanya kalau ia belum
+terdaftar. Installer menanganinya di Windows dan macOS; Linux yang membutuhkannya
+saat runtime, dan build pengembangan membutuhkannya di mana pun karena tidak ada
+yang memasangnya.
+
+Kegagalannya tidak fatal — justru itu alasan jalur tempel manual ada.
+
+Di VM pengembangan yang minimal, pendaftarannya **gagal sebagian**: berkas
+`.desktop`-nya tertulis dengan benar, tapi `update-desktop-database` tidak
+terpasang sehingga basis data MIME tidak disegarkan. Galat aslinya hanya berbunyi
+"No such file or directory (os error 2)" — tidak menyebut berkas maupun
+perbaikannya. Pesannya kini menambahkan keduanya.
+
 ### Jalur cadangan
 
 Selalu ada kotak tempel manual di sebelahnya: pengguna menempel tautan utuh atau
