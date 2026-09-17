@@ -9,6 +9,7 @@
     "core:default",
     "deep-link:default",
     "opener:default",
-    "dialog:default"
+    "dialog:default",
+    "updater:default"
   ]
 }

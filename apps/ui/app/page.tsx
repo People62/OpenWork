@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { DenPanel } from "./den/panel";
 import { parseAuthLink } from "./den/links";
 import { EnginePanel } from "./engine";
+import { UpdatePanel } from "./update";
 import { WorkspacePanel } from "./workspace/panel";
 import {
   commands,
@@ -161,6 +162,8 @@ export default function Home() {
       {tauri && <DenPanel />}
 
       {tauri && <EnginePanel workingDir={workingDir} />}
+
+      {tauri && <UpdatePanel />}
 
       {tauri && (
         <div className="card">

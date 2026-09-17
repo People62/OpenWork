@@ -76,6 +76,29 @@ export const commands = {
 	 */
 	openInBrowser: (url: string) => typedError<null, string>(__TAURI_INVOKE("open_in_browser", { url })),
 	launchLinks: () => __TAURI_INVOKE<string[]>("launch_links"),
+	/**
+	 *  Asks the endpoint whether there is a newer version. `None` means this is the
+	 *  newest.
+	 * 
+	 *  A failure here is ordinary, not exceptional: the machine may be offline, or
+	 *  GitHub may be unreachable. The message is returned as-is so the interface can
+	 *  say what actually happened rather than "update check failed".
+	 */
+	checkForUpdate: () => typedError<{
+	version: string,
+	currentVersion: string,
+	notes: string | null,
+	publishedAt: string | null,
+} | null, string>(__TAURI_INVOKE("check_for_update")),
+	/**
+	 *  Downloads and installs the update, then relaunches.
+	 * 
+	 *  The engine is stopped first, deliberately. Replacing the application's files
+	 *  while a child process is running out of them is how an update leaves a
+	 *  half-broken installation behind — and on Windows a running child can hold a
+	 *  file lock that makes the replacement fail outright.
+	 */
+	installUpdate: () => typedError<null, string>(__TAURI_INVOKE("install_update")),
 };
 
 /** Events */
@@ -258,6 +281,13 @@ export type SmokeExpectations = {
 	deepLink: string | null,
 	/**  When set, the interface must write or read data under this marker. */
 	persistence: PersistenceCheck | null,
+};
+
+export type UpdateAvailable = {
+	version: string,
+	currentVersion: string,
+	notes: string | null,
+	publishedAt: string | null,
 };
 
 /**

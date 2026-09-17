@@ -19,6 +19,7 @@ mod engine;
 mod error;
 mod shell;
 mod smoke;
+mod update;
 
 use serde::Serialize;
 use specta::Type;
@@ -77,6 +78,8 @@ fn builder() -> Builder<tauri::Wry> {
             deeplink::register_deep_link,
             deeplink::open_in_browser,
             deeplink::launch_links,
+            update::check_for_update,
+            update::install_update,
         ])
         // Events carry into bindings.ts too, listeners and all.
         .events(collect_events![
@@ -93,6 +96,7 @@ fn main() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(smoke::Board::default())
         .manage(engine::Engine::default())
         .manage(conversation::Conversation::default())
