@@ -18,19 +18,20 @@
 
 name: Skeleton · three platforms
 
-# `push` is deliberately limited to main. It used to cover every branch as well
-# as `pull_request`, and so every PR built Rust six times instead of three: one
-# round for the push to its branch, another for the PR itself. Both tested the
-# same commit and reported the same check names, so both appeared as "Required"
-# in the merge box and the wait doubled without adding a single piece of
-# information.
+# Runs on pull requests only.
 #
-# The consequence: a branch pushed without a PR is not checked. That is
-# deliberate — the gate is the merge into main, and every merge into main goes
-# through a PR.
+# It used to run on pushes to main as well, which meant every merged change was
+# built three times on three platforms: once for the PR, once for the push to
+# main, and once more by the release workflow. The second of those told nobody
+# anything — branch protection requires the PR to be green *and* up to date with
+# main, so the merge result is the commit that was already tested.
+#
+# A branch pushed without a PR is not checked either. That is deliberate: the
+# gate is the merge into main, and every merge into main goes through a PR.
+#
+# Main is still verified after a merge — the release workflow builds it on all
+# three platforms and runs the application before publishing anything.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -150,71 +151,65 @@ jobs:
             -exec ls -lh {} \; | tee -a "${GITHUB_STEP_SUMMARY}"
           echo '```' >> "${GITHUB_STEP_SUMMARY}"
 
-      # The binary under test must be the one produced by `tauri build` above.
-      # What decides this is not the debug or release profile: a plain
-      # `cargo build --release` still produces a dev context, and the application
-      # loads devUrl instead of the embedded export. Never slip a `cargo build`
-      # between these two steps — it overwrites the right binary with the wrong
-      # one, and the failure looks like a dead webview.
-      - name: Run the webview check
+      # Three launches, not seven.
+      #
+      # Every launch emits the three core signals, so a run that checked only
+      # those was pure repetition. And the expectations stack: one process can be
+      # asked to prove the engine starts from the bundle, that a deep link
+      # arrived, and that data was written — all at once. Only two things
+      # genuinely need a process of their own: reading data back after the first
+      # has died, and running with the engine taken away.
+      #
+      # The binary under test must be the one `tauri build` produced. The debug
+      # or release profile is not what decides it: a plain `cargo build --release`
+      # still produces a dev context and loads devUrl instead of the embedded
+      # export. Never slip a `cargo build` between the build and these steps.
+      - name: Run it, write data, and take the deep link
         shell: bash
         env:
           RANTAI_SMOKE: "1"
-          RANTAI_SMOKE_TIMEOUT_MS: "120000"
+          RANTAI_SMOKE_ENGINE: "present"
+          RANTAI_SMOKE_PERSIST: "write"
+          RANTAI_SMOKE_TIMEOUT_MS: "180000"
         run: |
           set -euo pipefail
-          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke.json"
-          echo "RANTAI_SMOKE_REPORT=${RANTAI_SMOKE_REPORT}" >> "${GITHUB_ENV}"
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-first.json"
+
+          marker="persisted-${GITHUB_RUN_ID}-${RUNNER_OS}"
+          echo "RANTAI_SMOKE_PERSIST_MARKER=${marker}" >> "${GITHUB_ENV}"
+          export RANTAI_SMOKE_PERSIST_MARKER="${marker}"
 
           case "${RUNNER_OS}" in
             Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
             macOS)   binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai" ;;
             *)       binary=apps/desktop/src-tauri/target/release/rantai ;;
           esac
-          test -x "${binary}" || { echo "binary tidak ada di ${binary}"; exit 1; }
+
+          # The deep link rides along on the platforms where the system hands it
+          # over as a command-line argument. macOS uses Apple Events, so it gets
+          # its own non-blocking probe below rather than being allowed to fail
+          # this step over something genuinely unknown.
+          args=()
+          if [ "${RUNNER_OS}" != "macOS" ]; then
+            export RANTAI_SMOKE_DEEP_LINK="GRANTTESTCI1234567890"
+            args+=("openwork://den-auth?grant=${RANTAI_SMOKE_DEEP_LINK}")
+          fi
 
           if [ "${RUNNER_OS}" = "Linux" ]; then
-            xvfb-run -a "${binary}"
+            xvfb-run -a "${binary}" "${args[@]}"
           else
-            "${binary}"
+            "${binary}" "${args[@]}"
           fi
 
       # Release 1 promises a conversation is "saved in SQLite and can be
-      # reopened". That is only provable by running the application twice: once
-      # to write, once to read after the process has genuinely died.
-      #
-      # A test inside one process does not prove it — it can pass entirely from
-      # an in-memory cache without a single byte touching disk.
-      - name: Write data that must persist
+      # reopened". That is only provable across two processes — a check inside
+      # one can pass entirely from an in-memory cache without a byte touching
+      # disk. This is the second process.
+      - name: Read the data back after the application closed
         shell: bash
         env:
           RANTAI_SMOKE: "1"
-          RANTAI_SMOKE_PERSIST: "tulis"
-          RANTAI_SMOKE_TIMEOUT_MS: "120000"
-        run: |
-          set -euo pipefail
-          tanda="persisted-${GITHUB_RUN_ID}-${RUNNER_OS}"
-          echo "RANTAI_SMOKE_PERSIST_MARKER=${tanda}" >> "${GITHUB_ENV}"
-          export RANTAI_SMOKE_PERSIST_MARKER="${tanda}"
-          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-write.json"
-
-          case "${RUNNER_OS}" in
-            Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
-            macOS)   binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai" ;;
-            *)       binary=apps/desktop/src-tauri/target/release/rantai ;;
-          esac
-
-          if [ "${RUNNER_OS}" = "Linux" ]; then
-            xvfb-run -a "${binary}"
-          else
-            "${binary}"
-          fi
-
-      - name: Read it back after the application closed
-        shell: bash
-        env:
-          RANTAI_SMOKE: "1"
-          RANTAI_SMOKE_PERSIST: "baca"
+          RANTAI_SMOKE_PERSIST: "read"
           RANTAI_SMOKE_TIMEOUT_MS: "120000"
         run: |
           set -euo pipefail
@@ -232,97 +227,12 @@ jobs:
             "${binary}"
           fi
 
-      # The Den sign-in was built first in Phase 3 on purpose, and this is its
-      # least certain part: URL scheme registration behaves differently on every
-      # OS, is at its most fragile in development mode, and **was never covered
-      # by CI in Rantai at all** — the three green signals there only exercised
-      # the webview, React, the bridge and IPC.
-      #
-      # On Linux and Windows the system hands the link over as a command-line
-      # argument, so it can be tested directly. The application is launched with
-      # a link, and the interface demands that the right grant reaches the
-      # screen — a link that never arrives, or arrives with a different grant,
-      # fails this step.
-      - name: Run the Den sign-in link check
-        if: runner.os != 'macOS'
-        shell: bash
-        env:
-          RANTAI_SMOKE: "1"
-          RANTAI_SMOKE_DEEP_LINK: "GRANTTESTCI1234567890"
-          RANTAI_SMOKE_TIMEOUT_MS: "120000"
-        run: |
-          set -euo pipefail
-          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-deeplink.json"
-          tautan="openwork://den-auth?grant=${RANTAI_SMOKE_DEEP_LINK}"
-
-          case "${RUNNER_OS}" in
-            Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
-            *)       binary=apps/desktop/src-tauri/target/release/rantai ;;
-          esac
-
-          if [ "${RUNNER_OS}" = "Linux" ]; then
-            xvfb-run -a "${binary}" "${tautan}"
-          else
-            "${binary}" "${tautan}"
-          fi
-
-      # macOS hands deep links over through Apple Events rather than
-      # command-line arguments, so the approach above may not hold there. Run as
-      # a non-blocking probe: the result says whether the path is the same,
-      # without holding a release over something genuinely unknown. Once it is
-      # green a few times, `continue-on-error` comes off.
-      - name: Probe the sign-in link on macOS (non-blocking)
-        if: runner.os == 'macOS'
-        continue-on-error: true
-        shell: bash
-        env:
-          RANTAI_SMOKE: "1"
-          RANTAI_SMOKE_DEEP_LINK: "GRANTTESTCI1234567890"
-          RANTAI_SMOKE_TIMEOUT_MS: "60000"
-        run: |
-          set -euo pipefail
-          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-deeplink.json"
-          binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai"
-          "${binary}" "openwork://den-auth?grant=${RANTAI_SMOKE_DEEP_LINK}"
-
-      # The Phase 4 gate: an installed application must be able to run the
-      # engine it shipped with. An installer that carries an engine it cannot
-      # actually run is worse than one that carries none, because the failure
-      # only shows up on a user's machine.
-      #
-      # Not enough that the engine starts — the interface demands its source is
-      # the bundled sidecar, not some OpenCode that happens to be on the runner.
-      - name: Run the engine from the bundle
-        shell: bash
-        env:
-          RANTAI_SMOKE: "1"
-          RANTAI_SMOKE_ENGINE: "present"
-          RANTAI_SMOKE_TIMEOUT_MS: "180000"
-        run: |
-          set -euo pipefail
-          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-engine-present.json"
-
-          case "${RUNNER_OS}" in
-            Windows) binary=apps/desktop/src-tauri/target/release/rantai.exe ;;
-            macOS)   binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai" ;;
-            *)       binary=apps/desktop/src-tauri/target/release/rantai ;;
-          esac
-
-          if [ "${RUNNER_OS}" = "Linux" ]; then
-            xvfb-run -a "${binary}"
-          else
-            "${binary}"
-          fi
-
-      # The Phase 2 gate asks for the engine's failure path to be tested: run
-      # without the engine binary, and make sure the message names the cause.
-      #
-      # Now that the engine really is bundled, pointing RANTAI_OPENCODE at
-      # nothing is no longer enough — the application would simply find its
-      # sidecar. So the sidecar is moved aside first. That is a truer test than
-      # the environment variable ever was: it is what a corrupted installation
-      # actually looks like.
-      - name: Run the check with the engine removed
+      # The Phase 2 gate: run without the engine and make sure the message names
+      # the cause. Now that the engine really is bundled, pointing
+      # RANTAI_OPENCODE at nothing is not enough — the application would find its
+      # sidecar. So the sidecar is moved aside, which is a truer test anyway:
+      # that is what a corrupted installation looks like.
+      - name: Run with the engine taken away
         shell: bash
         env:
           RANTAI_SMOKE: "1"
@@ -330,7 +240,7 @@ jobs:
           RANTAI_SMOKE_TIMEOUT_MS: "120000"
         run: |
           set -euo pipefail
-          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-engine-absent.json"
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-absent.json"
 
           case "${RUNNER_OS}" in
             Windows)
@@ -360,7 +270,26 @@ jobs:
             "${binary}"
           fi
 
-      # The Phase 2 gate also asks for no orphaned processes. If the step above
+      # macOS hands deep links over through Apple Events rather than command-line
+      # arguments, so the approach above may not hold there. Run as a
+      # non-blocking probe: it says whether the path is the same without holding
+      # a release over something genuinely unknown. Once it is green a few times,
+      # continue-on-error comes off and this folds into the first launch.
+      - name: Probe the sign-in link on macOS (non-blocking)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        shell: bash
+        env:
+          RANTAI_SMOKE: "1"
+          RANTAI_SMOKE_DEEP_LINK: "GRANTTESTCI1234567890"
+          RANTAI_SMOKE_TIMEOUT_MS: "60000"
+        run: |
+          set -euo pipefail
+          export RANTAI_SMOKE_REPORT="${RUNNER_TEMP}/rantai-smoke-deeplink.json"
+          binary="apps/desktop/src-tauri/target/release/bundle/macos/Rantai.app/Contents/MacOS/Rantai"
+          "${binary}" "openwork://den-auth?grant=${RANTAI_SMOKE_DEEP_LINK}"
+
+      # The Phase 2 gate also asks for no orphaned processes. If anything above
       # left an OpenCode alive, it shows up here.
       - name: Make sure no engine was left behind
         if: runner.os != 'Windows'
@@ -368,11 +297,11 @@ jobs:
         run: |
           set -euo pipefail
           if pgrep -x opencode > /dev/null 2>&1; then
-            echo "ada proses opencode yang tertinggal:"
+            echo "an opencode process was left behind:"
             pgrep -ax opencode
             exit 1
           fi
-          echo "tidak ada proses mesin yang tertinggal"
+          echo "no engine process was left behind"
 
       # The report names which signals arrived, so a failure says what broke —
       # not merely that something did.
