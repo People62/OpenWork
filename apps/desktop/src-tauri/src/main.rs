@@ -17,7 +17,9 @@ mod deeplink;
 mod domain;
 mod engine;
 mod error;
+mod shell;
 mod smoke;
+mod update;
 
 use serde::Serialize;
 use specta::Type;
@@ -76,6 +78,8 @@ fn builder() -> Builder<tauri::Wry> {
             deeplink::register_deep_link,
             deeplink::open_in_browser,
             deeplink::launch_links,
+            update::check_for_update,
+            update::install_update,
         ])
         // Events carry into bindings.ts too, listeners and all.
         .events(collect_events![
@@ -92,6 +96,7 @@ fn main() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(smoke::Board::default())
         .manage(engine::Engine::default())
         .manage(conversation::Conversation::default())
@@ -113,6 +118,19 @@ fn main() {
         .setup(move |app| {
             builder.mount_events(app);
             deeplink::install(app.handle());
+
+            // The menu is not decoration: on macOS a webview gets no clipboard
+            // at all unless the application supplies menu items carrying those
+            // roles. Its absence looks like a bug in the text boxes.
+            app.set_menu(shell::build_menu(app.handle())?)?;
+
+            // Smoke mode exits on its own schedule and never sees a user, so a
+            // tray icon there is noise — and on a headless CI runner it is one
+            // more thing that can fail for reasons that have nothing to do with
+            // what is being tested.
+            if !smoke::enabled() {
+                shell::build_tray(app.handle())?;
+            }
 
             let data_dir = app
                 .path()

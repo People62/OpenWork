@@ -131,9 +131,28 @@ pub fn open_in_browser(app: AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| format!("could not open the browser: {e}"))
 }
 
-/// Wires deep link delivery to the typed event.
+/// Wires deep link delivery to the typed event, and makes sure the system knows
+/// the scheme belongs to us.
 pub fn install(app: &AppHandle) {
     use tauri_plugin_deep_link::DeepLinkExt;
+
+    // Registering at startup, and only when it is not already registered.
+    //
+    // The installers handle this on Windows and macOS. Linux is the one that
+    // needs it at runtime — the association lives in a .desktop file the
+    // bundler cannot always write — and development builds need it everywhere,
+    // because nothing has installed them.
+    //
+    // Failure here is not fatal. The whole reason the manual paste path exists
+    // is that this step is the least reliable part of the sign-in.
+    match app.deep_link().is_registered(SCHEME) {
+        Ok(true) => {}
+        Ok(false) => match app.deep_link().register(SCHEME) {
+            Ok(()) => eprintln!("deep link: registered {SCHEME}://"),
+            Err(e) => eprintln!("deep link: could not register {SCHEME}://: {e}{}", hint(&e)),
+        },
+        Err(e) => eprintln!("deep link: could not ask the system about {SCHEME}://: {e}"),
+    }
 
     // The link that triggered the launch is recorded as a fact, then still sent
     // as an event for an interface that happens to be ready already.
@@ -154,6 +173,30 @@ pub fn install(app: &AppHandle) {
         let urls: Vec<String> = event.urls().iter().map(|u| u.to_string()).collect();
         dispatch(&receiver, urls);
     });
+}
+
+/// Adds what the error itself leaves out.
+///
+/// On Linux the plugin writes a .desktop file and then runs
+/// `update-desktop-database` to refresh the MIME database. When that tool is not
+/// installed the failure surfaces as a bare "No such file or directory (os error
+/// 2)" — which names neither the file nor the fix, and sends whoever reads it
+/// looking for the wrong thing. Seen on a minimal Ubuntu VM, where the .desktop
+/// file was written correctly and only the refresh failed.
+#[cfg(target_os = "linux")]
+fn hint(error: &tauri_plugin_deep_link::Error) -> String {
+    if error.to_string().contains("os error 2") {
+        return "\n  The .desktop file is probably written; what is missing is likely \
+                `update-desktop-database`, from the desktop-file-utils package. \
+                The manual paste path in the sign-in screen works regardless."
+            .to_string();
+    }
+    String::new()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn hint(_error: &tauri_plugin_deep_link::Error) -> String {
+    String::new()
 }
 
 fn dispatch(app: &AppHandle, urls: Vec<String>) {

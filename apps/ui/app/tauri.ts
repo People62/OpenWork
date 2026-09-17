@@ -22,6 +22,7 @@ export type {
   Model,
   Role,
   Session,
+  UpdateAvailable,
   Workspace,
 } from "./bindings";
 
