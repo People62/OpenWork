@@ -81,6 +81,57 @@ ditulis di dalamnya sebagai `#[tauri::command]` dan dipanggil dari antarmuka
 lewat `invoke()`. Tidak ada HTTP loopback, port dinamis, CORS, atau token di
 antara keduanya.
 
+## Menjalankan saat mengembangkan
+
+Ada dua cara, dan mana yang benar tergantung apa yang sedang Anda ubah.
+
+### Tampilan saja — di peramban, muat ulang seketika
+
+```bash
+cd apps/ui
+bun run dev:mock          # http://localhost:3000
+```
+
+Ini menjalankan antarmukanya tanpa Tauri dan tanpa Rust, dengan data tiruan
+supaya layarnya benar-benar terender. Perubahan pada komponen, gaya, dan tata
+letak langsung terlihat tanpa membangun ulang apa pun.
+
+Cocok untuk mesin pengembangan tanpa layar yang disunting lewat VS Code Remote:
+VS Code meneruskan porta 3000 sendiri, jadi halamannya terbuka di peramban mesin
+Anda.
+
+Tiruannya menyala **hanya** kalau ketiga hal ini benar: berjalan di peramban,
+tidak ada Tauri sungguhan, dan `NEXT_PUBLIC_RANTAI_MOCK=1`. Bendera itu wajib
+dan tidak disimpulkan dari `NODE_ENV` — tiruan yang memutuskan sendiri kapan
+menyala adalah tiruan yang suatu hari menyala di aplikasi terpasang. Ia juga
+menulis peringatan ke konsol tiap kali aktif.
+
+Fixture-nya, `apps/ui/app/dev-fixtures.json`, dipakai bersama oleh audit kontras.
+Dua kumpulan data pura-pura akan melenceng satu sama lain, dan yang diaudit jadi
+bukan yang dilihat.
+
+**Batasnya:** tidak ada mesin OpenCode, tidak ada SQLite, tidak ada deep link.
+Tombol yang memanggil perintah Rust akan menjawab dari data tiruan, bukan dari
+apa pun yang nyata.
+
+### Aplikasi utuh — jendela Tauri sungguhan
+
+```bash
+bun run dev               # dari akar repo
+```
+
+Ini membangun Rust, menyalakan `next dev`, dan membuka jendela Tauri. **Ia butuh
+layar** — pada mesin tanpa layar, jendelanya tidak akan terlihat.
+
+Untuk mesin dengan layar, siapkan mesinnya juga:
+
+```bash
+export RANTAI_OPENCODE=/jalur/ke/opencode   # atau jalankan `bun run sidecar`
+```
+
+Perubahan pada berkas TypeScript tetap muat ulang seketika. Perubahan pada Rust
+menuntut jendelanya ditutup dan `bun run dev` dijalankan lagi.
+
 ## Menjalankan
 
 ```bash

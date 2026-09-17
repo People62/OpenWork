@@ -2,46 +2,142 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ActivityIcon } from "lucide-react";
+import { ActivityIcon, FileTextIcon } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
-import { WorkspacePanel } from "./workspace/panel";
+import { cn } from "@/lib/utils";
+import { AppShell } from "./shell/app-shell";
+import { layout, useLayout } from "./shell/layout";
+import { SidePanel } from "./shell/panel";
+import { Composer } from "./session/composer";
+import { Conversation } from "./session/conversation";
+import { EmptyHero } from "./session/empty-hero";
 import { insideTauri } from "./tauri";
+import { WorkspaceSidebar } from "./workspace/sidebar";
+import { useAppState } from "./workspace/state";
 
 /// The workspace, and nothing else.
 ///
 /// Everything that proves the application works — signals, the database check,
-/// the engine and update panels — moved to /diagnostics. They were competing for
+/// the engine and update panels — lives at /diagnostics. They were competing for
 /// screen space with the actual work, and they are not the product.
 export default function Home() {
   const [tauri, setTauri] = useState(false);
   useEffect(() => setTauri(insideTauri()), []);
 
-  if (!tauri) {
-    return (
-      <main className="mx-auto flex max-w-lg flex-col gap-3 p-10">
-        <h1 className="font-heading text-2xl font-semibold">Rantai</h1>
-        <p className="text-muted-foreground text-sm">
-          This page is open in an ordinary browser, so there is no Rust side to
-          talk to. Run <code className="font-mono text-xs">bun run dev</code> from
-          the repository root to open it inside a Tauri window.
-        </p>
-      </main>
-    );
+  if (!tauri) return <OutsideTauri />;
+  return <Workspace />;
+}
+
+function Workspace() {
+  const state = useAppState();
+  const panel = useLayout().rightTab;
+  const [draft, setDraft] = useState("");
+
+  const session = state.selectedSession;
+
+  async function send() {
+    const content = draft.trim();
+    if (!content) return;
+    setDraft("");
+    await state.addMessage("user", content);
   }
 
   return (
-    <div className="flex h-screen flex-col">
-      <header className="border-border flex h-11 shrink-0 items-center justify-between border-b px-4">
-        <span className="font-heading text-sm font-semibold">Rantai</span>
-        {/* Base UI composes through `render`, not Radix's `asChild`. */}
-        <Button variant="ghost" size="sm" render={<Link href="/diagnostics" />}>
+    <AppShell
+      title={session ? session.title : "New session"}
+      sidebar={
+        <WorkspaceSidebar
+          state={state}
+          onNewTask={() => state.selectSession(null)}
+        />
+      }
+      headerActions={
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-muted-foreground hover:text-foreground hidden lg:inline-flex"
+          render={<Link href="/diagnostics" />}
+        >
           <ActivityIcon />
           Diagnostics
         </Button>
-      </header>
-      <div className="min-h-0 flex-1">
-        <WorkspacePanel />
-      </div>
+      }
+      panel={panel ? <SidePanel tab={panel} /> : undefined}
+      rail={
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={cn(
+            "hover:bg-muted hover:text-foreground rounded-xl transition-colors",
+            panel === "library" &&
+              "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
+          )}
+          aria-label="Library"
+          aria-pressed={panel === "library"}
+          onClick={() => layout.toggleRight("library")}
+        >
+          <FileTextIcon size={15} />
+        </Button>
+      }
+    >
+      {state.error ? (
+        <div className="border-destructive/40 bg-destructive/10 text-destructive mx-auto mt-4 w-full max-w-3xl rounded-lg border px-3 py-2 text-[13px]">
+          {state.error}
+        </div>
+      ) : null}
+
+      {session ? (
+        <>
+          <Conversation messages={state.messages} />
+          <div className="shrink-0 px-2 pb-4 md:px-10">
+            <div className="mx-auto w-full max-w-3xl">
+              <Composer
+                value={draft}
+                onChange={setDraft}
+                onSend={() => void send()}
+                disabled={state.busy}
+                placeholder="Reply…"
+              />
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto py-10">
+          {state.selectedWorkspace ? (
+            <EmptyHero onRunTask={(p) => void state.startTask(p)} busy={state.busy} />
+          ) : (
+            <NoWorkspace />
+          )}
+        </div>
+      )}
+    </AppShell>
+  );
+}
+
+function NoWorkspace() {
+  return (
+    <div className="mx-auto max-w-[420px] space-y-1.5 px-6 text-center">
+      <h2 className="font-heading text-foreground text-[20px] leading-[26px] font-semibold tracking-[-0.02em]">
+        Pick a workspace to start
+      </h2>
+      <p className="text-muted-foreground text-[13px]">
+        A workspace is a folder on this machine. Add one from the sidebar and
+        every session you open will run inside it.
+      </p>
     </div>
+  );
+}
+
+function OutsideTauri() {
+  return (
+    <main className="mx-auto flex max-w-lg flex-col gap-3 p-10">
+      <h1 className="font-heading text-2xl font-semibold">Rantai</h1>
+      <p className="text-muted-foreground text-sm">
+        This page is open in an ordinary browser, so there is no Rust side to
+        talk to. Run <code className="font-mono text-xs">bun run dev</code> from
+        the repository root to open it inside a Tauri window.
+      </p>
+    </main>
   );
 }

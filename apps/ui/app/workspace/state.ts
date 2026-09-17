@@ -30,6 +30,8 @@ export type AppState = {
   createWorkspace: (name: string, path: string) => Promise<void>;
   createSession: (title: string) => Promise<void>;
   addMessage: (role: "user" | "assistant", content: string) => Promise<void>;
+  /** Creates a session and writes the first message into it, in that order. */
+  startTask: (prompt: string) => Promise<void>;
   refreshMessages: () => Promise<void>;
 };
 
@@ -98,6 +100,40 @@ export function useAppState(): AppState {
     void refreshMessages();
   }, [refreshMessages]);
 
+  /// Creates a session in the selected workspace and opens it. Returns the row
+  /// so a caller that needs the new id does not have to wait for a render.
+  const openSession = useCallback(
+    async (title: string): Promise<Session | null> => {
+      if (!selectedWorkspace) return null;
+      const created = await run(() =>
+        unwrap(commands.createSession(selectedWorkspace.id, title)),
+      );
+      if (!created) return null;
+      setSessions((before) => [created, ...before]);
+      setSelectedSession(created);
+      return created;
+    },
+    [selectedWorkspace, run],
+  );
+
+  const writeMessage = useCallback(
+    async (sessionId: string, role: "user" | "assistant", content: string) => {
+      const created = await run(() =>
+        unwrap(commands.addMessage(sessionId, role, content)),
+      );
+      if (!created) return;
+      setMessages((before) => [...before, created]);
+      // A session that was just used rises to the top — Rust has already updated
+      // `updatedAt`, so the list has to reflect it.
+      setSessions((before) =>
+        [...before]
+          .map((s) => (s.id === sessionId ? { ...s, updatedAt: created.createdAt } : s))
+          .sort((a, b) => b.updatedAt - a.updatedAt),
+      );
+    },
+    [run],
+  );
+
   return {
     workspaces,
     selectedWorkspace,
@@ -117,42 +153,50 @@ export function useAppState(): AppState {
     },
 
     async createSession(title) {
-      if (!selectedWorkspace) return;
-      const created = await run(() =>
-        unwrap(commands.createSession(selectedWorkspace.id, title)),
-      );
-      if (!created) return;
-      setSessions((before) => [created, ...before]);
-      setSelectedSession(created);
+      await openSession(title);
     },
 
     async addMessage(role, content) {
       if (!selectedSession) return;
-      const created = await run(() =>
-        unwrap(commands.addMessage(selectedSession.id, role, content)),
-      );
+      await writeMessage(selectedSession.id, role, content);
+    },
+
+    // Two writes that have to happen in order, so they live here rather than at
+    // the call site. A screen that did `await createSession(...)` and then
+    // `addMessage(...)` would lose the message every time: the second call reads
+    // the selected session out of a closure that React has not re-rendered yet,
+    // so it still sees the session from before — or none at all.
+    async startTask(prompt) {
+      const created = await openSession(firstLine(prompt));
       if (!created) return;
-      setMessages((before) => [...before, created]);
-      // A session that was just used rises to the top — Rust has already updated
-      // `updatedAt`, so the list has to reflect it.
-      setSessions((before) =>
-        [...before]
-          .map((s) =>
-            s.id === selectedSession.id ? { ...s, updatedAt: created.createdAt } : s,
-          )
-          .sort((a, b) => b.updatedAt - a.updatedAt),
-      );
+      await writeMessage(created.id, "user", prompt);
     },
 
     refreshMessages,
   };
 }
 
-export function shortTime(millis: number): string {
-  return new Date(millis).toLocaleString(undefined, {
+/// How long ago, in the shortest form that still says it: `now`, `4m`, `3h`,
+/// `13d`, then a date. Sidebar rows have room for two characters at the end of a
+/// title, and a full timestamp there would push the title out instead.
+export function relativeAge(millis: number, now = Date.now()): string {
+  const seconds = Math.max(0, Math.round((now - millis) / 1000));
+  if (seconds < 60) return "now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  if (days < 30) return `${days}d`;
+  return new Date(millis).toLocaleDateString(undefined, {
     day: "numeric",
     month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
   });
+}
+
+/// A session title taken from the task that started it. The first line is what
+/// the sidebar shows, and a whole paragraph there is unreadable.
+function firstLine(prompt: string): string {
+  const line = prompt.split("\n", 1)[0]?.trim() ?? prompt;
+  return line.length > 60 ? `${line.slice(0, 57)}…` : line;
 }

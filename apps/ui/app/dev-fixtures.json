@@ -1,0 +1,82 @@
+{
+  "hello": {
+    "message": "Hello from Rust, Rantai.",
+    "platform": "linux",
+    "arch": "x86_64",
+    "tauriVersion": "2.11.5",
+    "appVersion": "0.0.1"
+  },
+  "list_workspaces": [
+    {
+      "id": "w1",
+      "name": "openwork-new",
+      "path": "/home/someone/openwork-new",
+      "createdAt": -86400000
+    },
+    {
+      "id": "w2",
+      "name": "a-much-longer-workspace-name-that-truncates",
+      "path": "/home/someone/projects/a-much-longer-workspace-name-that-truncates",
+      "createdAt": -172800000
+    }
+  ],
+  "list_sessions": [
+    {
+      "id": "s1",
+      "workspaceId": "w1",
+      "title": "Looking at the release workflow",
+      "createdAt": -7200000,
+      "updatedAt": -600000
+    },
+    {
+      "id": "s2",
+      "workspaceId": "w1",
+      "title": "A session title long enough to need truncating somewhere",
+      "createdAt": -90000000,
+      "updatedAt": -86400000
+    }
+  ],
+  "list_messages": [
+    {
+      "id": "m1",
+      "sessionId": "s1",
+      "role": "user",
+      "content": "Why did the Windows job fail?",
+      "createdAt": -700000
+    },
+    {
+      "id": "m2",
+      "sessionId": "s1",
+      "role": "assistant",
+      "content": "The temp directory is on C: and the workspace on D:, and rename cannot cross drives.",
+      "createdAt": -690000
+    }
+  ],
+  "check_database": {
+    "writeReadIntact": true,
+    "workspaceCount": 2,
+    "sessionCount": 2,
+    "messageCount": 2
+  },
+  "engine_status": {
+    "running": false,
+    "address": null,
+    "binaryPath": null,
+    "source": null,
+    "uptimeSeconds": null
+  },
+  "deep_link_status": {
+    "scheme": "openwork",
+    "registered": true,
+    "error": null
+  },
+  "launch_links": [],
+  "smoke_expectations": {
+    "enabled": false,
+    "engine": null,
+    "deepLink": null,
+    "persistence": null
+  },
+  "list_models": [],
+  "report_signal": null
+}
