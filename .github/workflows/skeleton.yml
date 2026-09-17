@@ -189,16 +189,21 @@ jobs:
           # over as a command-line argument. macOS uses Apple Events, so it gets
           # its own non-blocking probe below rather than being allowed to fail
           # this step over something genuinely unknown.
-          args=()
-          if [ "${RUNNER_OS}" != "macOS" ]; then
-            export RANTAI_SMOKE_DEEP_LINK="GRANTTESTCI1234567890"
-            args+=("openwork://den-auth?grant=${RANTAI_SMOKE_DEEP_LINK}")
-          fi
-
-          if [ "${RUNNER_OS}" = "Linux" ]; then
-            xvfb-run -a "${binary}" "${args[@]}"
+          #
+          # Written out branch by branch rather than with an argument array.
+          # macOS ships bash 3.2, where `"${arr[@]}"` on an *empty* array counts
+          # as an unbound variable under `set -u` — and macOS is the one platform
+          # where the array would be empty. It failed there and nowhere else.
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            "${binary}"
           else
-            "${binary}" "${args[@]}"
+            export RANTAI_SMOKE_DEEP_LINK="GRANTTESTCI1234567890"
+            link="openwork://den-auth?grant=${RANTAI_SMOKE_DEEP_LINK}"
+            if [ "${RUNNER_OS}" = "Linux" ]; then
+              xvfb-run -a "${binary}" "${link}"
+            else
+              "${binary}" "${link}"
+            fi
           fi
 
       # Release 1 promises a conversation is "saved in SQLite and can be
