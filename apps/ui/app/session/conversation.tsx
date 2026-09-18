@@ -129,19 +129,30 @@ function Folded({
 }
 
 /**
- * A turn that ended badly.
+ * A turn that ended badly — or one somebody stopped.
  *
  * Shown, not swallowed. The engine reports its own failures inside the message —
  * a refused provider, an interrupted turn — and an answer that simply stops with
  * nothing said is the hardest kind of bug to report.
+ *
+ * The engine's shape is `{name, data: {message}}`. A turn stopped with Stop comes
+ * back as `MessageAbortedError`, which is not a failure at all: it is shown
+ * quietly, not in the red reserved for things that went wrong.
  */
 function TurnError({ error }: { error: unknown }) {
+  const shaped = (error ?? {}) as { name?: unknown; message?: unknown; data?: { message?: unknown } };
+  if (shaped.name === "MessageAbortedError") {
+    return <div className="text-muted-foreground text-[12px]">Stopped.</div>;
+  }
   const message =
-    typeof error === "object" && error !== null && "message" in error
-      ? String((error as { message: unknown }).message)
-      : JSON.stringify(error);
+    typeof shaped.data?.message === "string"
+      ? shaped.data.message
+      : typeof shaped.message === "string"
+        ? shaped.message
+        : JSON.stringify(error);
   return (
     <div className="border-destructive/40 bg-destructive/10 text-destructive w-full rounded-lg border px-3 py-2 text-[13px]">
+      {typeof shaped.name === "string" ? `${shaped.name}: ` : ""}
       {message}
     </div>
   );

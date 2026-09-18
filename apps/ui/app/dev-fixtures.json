@@ -106,9 +106,18 @@
         "completed": null
       },
       "text": "Why did the Windows job fail?",
-      "content": [],
+      "content": [
+        {
+          "type": "text",
+          "text": "Why did the Windows job fail?"
+        }
+      ],
       "finish": null,
-      "error": null
+      "error": null,
+      "model": {
+        "providerID": "minimax",
+        "id": "MiniMax-M2.5"
+      }
     },
     {
       "id": "msg_two",
@@ -142,7 +151,11 @@
         }
       ],
       "finish": "stop",
-      "error": null
+      "error": null,
+      "model": {
+        "providerID": "minimax",
+        "id": "MiniMax-M2.5"
+      }
     }
   ],
   "list_providers": {

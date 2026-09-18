@@ -38,22 +38,43 @@ What is still ours is the **workspace** — a folder someone chose, under a name
 they chose. OpenCode derives its own `project` from the path alone and has no
 room for that name.
 
-### Reading is free of the working directory; writing is not
+### One engine, two APIs
 
-| | Bound to the engine's cwd? |
+OpenCode v1.18.18 carries two generations of its HTTP API side by side: a newer
+one under `/api/…` and an older one at the root. They share one table of
+sessions but **keep their messages apart** — a turn sent through one is
+invisible to the other. Measured across nineteen sessions: every one had its
+messages in exactly one of the two lists, never both.
+
+Conversations go through the older generation, because the newer one does not
+run a turn from OpenCode's own credential store:
+
+| Engine started with the key… | A turn through `/api/session/{id}/prompt` | Through `/session/{id}/prompt_async` |
+| --- | --- | --- |
+| only in `auth.json` | accepted, then **never runs** — no answer, no error | runs |
+| in `auth.json` and in the environment | runs | runs |
+
+`auth.json` is where `opencode auth login` and the AI Providers screen both put
+a key, and it is all an installed application has. Every test in this
+repository passed for a long time because the engine happened to inherit the
+key from the developer's environment; the live tests now strip every
+`*_API_KEY` before starting it.
+
+| Purpose | Route |
 | --- | --- |
-| `GET /api/session?directory=…` | **no** — one engine serves every workspace |
-| `GET /api/session/{id}/message` | no |
-| `POST /api/session` | **yes** — the `directory` parameter is ignored |
-| running a turn | **yes** |
+| send a turn | `POST /session/{id}/prompt_async` — `{parts, model}` |
+| stream it | `GET /event` |
+| read a conversation | `GET /session/{id}/message` — oldest first |
+| stop a turn | `POST /session/{id}/abort` |
+| models that can run | `GET /provider` — `connected`, and each provider's `models` |
+| list or create sessions | `/api/session` — shared, so either generation works |
 
-So the sidebar can list every workspace's history from a single engine, but
-choosing a workspace to *work in* restarts the engine there. A create aimed at
-another folder came back located in the engine's own — that is how this was
-established.
+### Reading history is free of the working directory
 
-Both lists arrive newest-first. `client.rs` reverses the message list, so the
-one place that knows about the engine's ordering sits next to the engine.
+`GET /api/session?directory=…` lists any folder's sessions from one engine, so
+the sidebar never waits on a restart. Creating a session is bound to the engine's
+own working directory — a create aimed at another folder came back located in
+the engine's — so choosing a workspace to *work in* restarts the engine there.
 
 ## Design system
 
@@ -279,31 +300,34 @@ The same folder can offer dozens of models or none, depending on whether OpenCod
 recognises it as a project. Measured on the development machine: this repository's
 root offers 31 models, `~` offers none.
 
-The model must also be fixed on the **session**, not on the prompt — the
-`/prompt` schema has no model field at all, and slipping one in is silently
-ignored. A session without one falls back to the engine's default, and if that
-default cannot be used, **the failure never appears on the event stream at all**
-— only in the engine's log. The interface would appear to hang for no reason.
+Every prompt names its model, and a conversation can change model between
+turns — measured by switching models between two turns of one session, each
+answered by the model it named. Without a model the engine falls back to its
+own default; on the development machine that is OpenCode's free tier, which
+refuses to answer outside the OpenCode application.
 
-Provider credentials are read from the engine process's environment, for example
-`MINIMAX_API_KEY`. Because the engine is a child process, it inherits the
-application's environment.
+The newer `/api/model` does not list a provider whose key is only in
+`auth.json` — with the key only there it offered 31 models, all of them the
+free tier. `/provider` lists what is actually connected, and each provider's
+default model is put first. The free tier's own provider, `opencode`, goes last.
 
-### Tokens flow from `/api/event`, not from the session stream
+### Tokens flow from `/event`
 
-OpenCode has two streams, and the difference only shows up when you run them:
+For a turn sent through `prompt_async`, tokens arrive on `/event` as
+`message.part.delta`; `/api/event` carried six events for the same turn and not
+one token. A turn ends with `session.idle` — after every step, tool calls
+included, and after a turn that was stopped.
 
-| Stream | What it carries |
-|---|---|
-| `/api/session/{id}/event` | durable and coarse — `text.started` then `text.ended`, not one token between |
-| `/api/event` | carries `session.next.text.delta` and `reasoning.delta` |
+A delta does not say what kind of part it belongs to: its `field` is `"text"` for
+reasoning as much as for the answer. The kind of each part comes from
+`message.part.updated`, which the engine sends before that part's first delta,
+and only `text` parts stream onto the screen.
 
-One and the same conversation produced **8 events** on the per-session stream and
-**63** on the global one. So the client uses the global stream and filters by
-`sessionID`.
+The prompt is sent only once the stream is open. A short turn can finish before
+a stream opened after it has connected, and then its end is never seen.
 
-That stream also **sends no `event:` lines at all** — only `data:`, with the
-event kind inside the JSON as a `type` field.
+This stream also **sends no `event:` lines at all** — only `data:`, with the event
+kind inside the JSON as a `type` field.
 
 ### Message parts
 

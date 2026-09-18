@@ -13,15 +13,18 @@ import type { Model } from "../tauri";
 import { modelLabel, sameModel } from "./model";
 
 /**
- * Picks the model a new conversation will run on.
+ * Picks the model that answers next.
  *
- * It is a picker for the *next* session, not for this one. A session's model is
- * fixed when the engine creates it and there is no way to change it afterwards —
- * `prompt` accepts a model and ignores it, and no route updates a session. So
- * when a conversation is open this shows what that conversation runs on, plainly
- * labelled, and choosing a different one changes what the next `New task` gets.
- * A control that silently did nothing would be worse than one that says what it
- * does.
+ * In an open conversation that is the next turn of *this* conversation: every
+ * prompt names its own model, so a conversation can change model between turns.
+ * On the empty screen it is the model the new task starts on. Either way the
+ * choice also becomes the default for tasks started later.
+ *
+ * An earlier version said a conversation was fixed to its first model, and told
+ * people so in this very popover. That came from probing only the engine's
+ * newer API; the older one, which conversations now go through, accepts a model
+ * on every prompt — measured by switching models between two turns of the same
+ * session.
  *
  * Models are grouped by provider because the list is long — 59 on the
  * development machine — and a provider is how anyone actually narrows it down.
@@ -31,8 +34,8 @@ export type ModelPickerProps = {
   /** What the open session runs on, or what the next one will. */
   value: Model | null;
   onChange: (model: Model) => void;
-  /** True while a conversation is open, which makes the choice apply to the next one. */
-  locked?: boolean;
+  /** True while a conversation is open: the choice applies from its next turn. */
+  inConversation?: boolean;
   disabled?: boolean;
 };
 
@@ -65,9 +68,9 @@ export function ModelPicker(props: ModelPickerProps) {
             type="button"
             disabled={props.disabled || props.models.length === 0}
             title={
-              props.locked
-                ? "This conversation is fixed to this model. Choosing another changes what the next task starts with."
-                : "The model a new task starts with"
+              props.inConversation
+                ? "The model that answers your next message"
+                : "The model this task starts on"
             }
             className="text-muted-foreground hover:bg-dls-hover hover:text-foreground inline-flex h-9 min-w-0 items-center gap-1 rounded-md px-2 text-[13px] transition-colors disabled:pointer-events-none disabled:opacity-50"
           >
@@ -88,10 +91,9 @@ export function ModelPicker(props: ModelPickerProps) {
           />
         </div>
 
-        {props.locked ? (
+        {props.inConversation ? (
           <p className="text-muted-foreground border-border border-b px-3 py-2 text-[11px] leading-[15px]">
-            This conversation stays on its own model. A new one will start with
-            what you pick here.
+            Applies from your next message. New tasks start with it too.
           </p>
         ) : null}
 

@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 
 use crate::app_resource_dir;
 use crate::engine::client::{Chunk, Client, EngineSession, Message, Model};
-use crate::engine::{Engine, EngineError, EngineStatus};
+use crate::engine::{Engine, EngineError, EngineFailure, EngineStatus};
 
 /// Emitted when the stream stops — finished on its own, cancelled, or failed.
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
@@ -116,13 +116,18 @@ pub async fn create_engine_session(
 }
 
 /// Sends a prompt, then streams the answer out as events. This command returns
-/// immediately; the stream runs in the background until it finishes or is
-/// stopped.
+/// once the prompt is accepted; the stream runs in the background until the
+/// turn ends or is stopped.
+///
+/// `model` is the model that answers *this* turn. A conversation can change
+/// model between turns, so it travels with each prompt rather than living on
+/// the session.
 #[tauri::command]
 #[specta::specta]
 pub async fn send_prompt(
     engine_session_id: String,
     text: String,
+    model: Option<Model>,
     app: AppHandle,
     engine: State<'_, Engine>,
     conversation: State<'_, Conversation>,
@@ -139,6 +144,7 @@ pub async fn send_prompt(
     let stream_client = client.clone();
     let stream_app = app.clone();
     let stream_session = engine_session_id.clone();
+    let (send_ready, receive_ready) = tokio::sync::oneshot::channel();
 
     tokio::spawn(async move {
         let emitter = stream_app.clone();
@@ -146,6 +152,7 @@ pub async fn send_prompt(
             .stream(
                 &stream_session,
                 receive_cancel.clone(),
+                Some(send_ready),
                 move |chunk: Chunk| {
                     let _ = chunk.emit(&emitter);
                 },
@@ -160,7 +167,28 @@ pub async fn send_prompt(
         .emit(&stream_app);
     });
 
-    Ok(client.send_prompt(&engine_session_id, &text).await?)
+    // The prompt goes out only once the stream is listening. A short turn can
+    // finish before a stream opened after it has connected, and then its end is
+    // never seen: no `Finished`, and a composer stuck on Stop. If the stream
+    // fails to open at all, the spawned task reports that through `Finished`,
+    // and there is no point sending a prompt nobody can hear the answer to.
+    match tokio::time::timeout(std::time::Duration::from_secs(10), receive_ready).await {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => {
+            return Err(EngineError::from(EngineFailure::Http(
+                "the event stream closed before it opened; the prompt was not sent".into(),
+            )))
+        }
+        Err(_) => {
+            return Err(EngineError::from(EngineFailure::Http(
+                "the event stream did not open within 10 seconds; the prompt was not sent".into(),
+            )))
+        }
+    }
+
+    Ok(client
+        .send_prompt(&engine_session_id, &text, model.as_ref())
+        .await?)
 }
 
 /// Stops a conversation mid-flight — the engine side through `interrupt`, our

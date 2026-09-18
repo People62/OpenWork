@@ -93,12 +93,13 @@ pub struct MessageTime {
     pub completed: Option<i64>,
 }
 
-/// One message in a conversation.
+/// One message in a conversation, as the interface sees it.
 ///
-/// The two kinds are not the same shape, and flattening them would lose the
-/// difference: a user message carries flat `text`, an assistant message carries
-/// a list of typed parts. Both are kept as the engine gives them.
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+/// Built from the engine's `{info, parts}` pair rather than deserialised
+/// straight into, so the interface keeps one flat shape and this file is the
+/// only place that knows the engine nests it. A user message carries its prose
+/// as `text`; an assistant message carries typed parts in `content`.
+#[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
     pub id: String,
@@ -107,18 +108,88 @@ pub struct Message {
     #[serde(rename = "type")]
     pub role: String,
     pub time: MessageTime,
-    /// Set on user messages.
-    #[serde(default)]
+    /// The prose of a user message.
     pub text: Option<String>,
-    /// Set on assistant messages.
-    #[serde(default)]
+    /// Every part, in order. For a user message the prose is in `text` as well.
     pub content: Vec<Part>,
-    /// `"stop"`, `"error"`, and whatever else the engine reports.
-    #[serde(default)]
+    /// The model this message was sent to, or answered by. It can differ from
+    /// turn to turn: a conversation is not fixed to one model.
+    pub model: Option<Model>,
+    /// `"stop"`, `"tool-calls"`, and whatever else the engine reports.
     pub finish: Option<String>,
+    /// Set when the turn failed or was stopped — `MessageAbortedError` for a
+    /// turn someone pressed Stop on.
     #[specta(type = Option<specta_typescript::Unknown>)]
-    #[serde(default)]
     pub error: Option<serde_json::Value>,
+}
+
+/// What `GET /session/{id}/message` actually sends: one of these per message.
+#[derive(Debug, Deserialize)]
+struct WireMessage {
+    info: WireInfo,
+    #[serde(default)]
+    parts: Vec<Part>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireInfo {
+    id: String,
+    role: String,
+    time: MessageTime,
+    #[serde(default)]
+    finish: Option<String>,
+    #[serde(default)]
+    error: Option<serde_json::Value>,
+    /// An assistant message names its model flat, as two fields…
+    #[serde(default, rename = "providerID")]
+    provider_id: Option<String>,
+    #[serde(default, rename = "modelID")]
+    model_id: Option<String>,
+    /// …and a user message names it as an object. Same engine, two shapes.
+    #[serde(default)]
+    model: Option<WireModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireModel {
+    #[serde(rename = "providerID")]
+    provider_id: String,
+    #[serde(rename = "modelID")]
+    model_id: String,
+}
+
+impl From<WireMessage> for Message {
+    fn from(wire: WireMessage) -> Self {
+        let WireMessage { info, parts } = wire;
+        let model = match (info.provider_id, info.model_id, info.model) {
+            (Some(provider_id), Some(id), _) => Some(Model { provider_id, id }),
+            (_, _, Some(m)) => Some(Model {
+                provider_id: m.provider_id,
+                id: m.model_id,
+            }),
+            _ => None,
+        };
+        let text = (info.role == "user").then(|| {
+            parts
+                .iter()
+                .filter_map(|p| match p {
+                    Part::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        });
+        Message {
+            id: info.id,
+            role: info.role,
+            time: info.time,
+            text,
+            content: parts,
+            model,
+            finish: info.finish,
+            error: info.error,
+        }
+    }
 }
 
 /// A piece of an assistant message.
@@ -202,6 +273,71 @@ pub struct Providers {
     pub connected: Vec<String>,
 }
 
+/// `/provider` as the model list needs it. Separate from `Providers` because it
+/// reads `models`, which that type deliberately does not carry.
+///
+/// Like `Provider`, it has no field for a key, so the credential in the same
+/// response is dropped on arrival.
+#[derive(Debug, Deserialize)]
+struct WireCatalogue {
+    all: Vec<WireCatalogueEntry>,
+    connected: Vec<String>,
+    /// The engine's own pick per provider, by provider id.
+    #[serde(default)]
+    default: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireCatalogueEntry {
+    id: String,
+    #[serde(default)]
+    models: serde_json::Value,
+}
+
+/// The provider the free tier belongs to. See `Client::list_models`.
+const FREE_TIER_PROVIDER: &str = "opencode";
+
+impl WireCatalogue {
+    fn usable_models(self) -> Vec<Model> {
+        let mut connected = self.connected;
+        // Stable, so every other provider keeps the engine's own order.
+        connected.sort_by_key(|id| id == FREE_TIER_PROVIDER);
+
+        let mut out = Vec::new();
+        for provider_id in connected {
+            let Some(entry) = self.all.iter().find(|p| p.id == provider_id) else {
+                continue;
+            };
+            // An object keyed by model id is what the engine sends. A list is
+            // accepted too rather than failing the whole picker over it.
+            let mut ids: Vec<String> = match &entry.models {
+                serde_json::Value::Object(map) => map.keys().cloned().collect(),
+                serde_json::Value::Array(items) => items
+                    .iter()
+                    .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(str::to_owned))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            // The object arrives sorted by name, not in the engine's order — no
+            // `preserve_order` on serde_json here, and adding a feature to save
+            // an ordering is not worth it. The engine's own default goes first
+            // instead, which is the order that actually matters: it is what a
+            // new session picks when nothing has been chosen.
+            if let Some(preferred) = self.default.get(&provider_id) {
+                if let Some(at) = ids.iter().position(|id| id == preferred) {
+                    let chosen = ids.remove(at);
+                    ids.insert(0, chosen);
+                }
+            }
+            out.extend(ids.into_iter().map(|id| Model {
+                provider_id: provider_id.clone(),
+                id,
+            }));
+        }
+        out
+    }
+}
+
 /// A model that is actually available, as reported by the engine.
 ///
 /// It must be asked for, never guessed: provider availability depends on the
@@ -215,14 +351,30 @@ pub struct Model {
     pub id: String,
 }
 
+/// The body of `POST /session/{id}/prompt_async`.
 #[derive(Debug, Serialize)]
 struct PromptBody<'a> {
-    prompt: PromptText<'a>,
+    parts: [PromptPart<'a>; 1],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<PromptModel<'a>>,
 }
 
 #[derive(Debug, Serialize)]
-struct PromptText<'a> {
+struct PromptPart<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
     text: &'a str,
+}
+
+/// `modelID` here, where `Model` everywhere else says `id`. The engine refuses
+/// extra fields on this object, so sending our own shape is a 400, not a
+/// silently ignored key.
+#[derive(Debug, Serialize)]
+struct PromptModel<'a> {
+    #[serde(rename = "providerID")]
+    provider_id: &'a str,
+    #[serde(rename = "modelID")]
+    model_id: &'a str,
 }
 
 /// One piece flowing from the engine to the screen.
@@ -316,25 +468,44 @@ impl Client {
         Ok(response.status().is_success())
     }
 
+    /// Every model a connected provider offers.
+    ///
+    /// **Read from `/provider`, not `/api/model`.** The newer route only counts
+    /// a provider whose key is in the engine's environment; a key in OpenCode's
+    /// own credential store does not appear there. Measured with the key only in
+    /// the store: `/api/model` offered 31 models, every one of them OpenCode's
+    /// free tier, while `/provider` listed MiniMax as connected with its seven.
+    /// An installed application has its keys in the store, so the older route is
+    /// the only one that shows what can actually run.
+    ///
+    /// OpenCode's own provider comes last. It is always connected, because its
+    /// free tier needs no key — and that free tier refuses to answer outside the
+    /// OpenCode application. Listed first, it would be what a new session picks
+    /// when nothing else has been chosen.
+    ///
+    /// **Nothing from this response may reach an error message.** It is the same
+    /// endpoint that returns API keys in plain text.
     pub async fn list_models(&self) -> Result<Vec<Model>, EngineFailure> {
         let response = self
             .http
-            .get(self.url("/api/model"))
+            .get(self.url("/provider"))
             .send()
             .await
             .map_err(to_failure)?;
 
         let status = response.status();
-        let body = response.text().await.map_err(to_failure)?;
         if !status.is_success() {
             return Err(EngineFailure::Http(format!(
-                "listing models failed ({status}): {body}"
+                "listing models failed ({status})"
             )));
         }
-
-        serde_json::from_str::<Envelope<Vec<Model>>>(&body)
-            .map(|e| e.data)
-            .map_err(|e| EngineFailure::Http(format!("model list unreadable: {e}; body: {body}")))
+        let body = response.text().await.map_err(to_failure)?;
+        let catalogue = serde_json::from_str::<WireCatalogue>(&body).map_err(|e| {
+            // The serde message names a position and an expected type; it never
+            // quotes the input, so it is safe to pass on. The body is not.
+            EngineFailure::Http(format!("model list unreadable: {e}"))
+        })?;
+        Ok(catalogue.usable_models())
     }
 
     /// The provider catalogue, and which of it is usable.
@@ -416,11 +587,15 @@ impl Client {
 
     /// Every session the engine knows about in `directory`.
     ///
-    /// **Reading is not bound to the engine's working directory; writing is.**
+    /// This stays on the newer `/api` generation while messages and turns use
+    /// the older one, and that is safe: the two generations keep separate
+    /// message stores but share one table of sessions. A session whose turns ran
+    /// through `prompt_async` is listed here, with the model its last turn used.
+    ///
+    /// **Reading is not bound to the engine's working directory; creating is.**
     /// `?directory=` filters the list to any folder, so one engine serves the
-    /// whole sidebar. Creating a session and running a turn ignore the parameter
-    /// entirely and land in the engine's own cwd — measured, not assumed: a
-    /// create aimed at another folder came back located in the engine's.
+    /// whole sidebar. A create aimed at another folder came back located in the
+    /// engine's own — measured, not assumed.
     pub async fn list_sessions(
         &self,
         directory: Option<&str>,
@@ -437,30 +612,45 @@ impl Client {
         read_envelope::<Vec<EngineSession>>(self.http.get(url), "session list").await
     }
 
-    /// The messages in a session, oldest first.
+    /// The messages in a session, oldest first — the order the engine already
+    /// sends them in on this route.
     ///
-    /// The engine returns them newest first — both this list and the session
-    /// list are descending. Reversing here rather than on screen keeps the one
-    /// place that knows about the engine's ordering next to the engine.
+    /// **`/session/{id}/message`, not `/api/session/{id}/message`.** OpenCode
+    /// v1.18.18 carries two generations of its API side by side, and they keep
+    /// their messages apart: a turn sent through one is invisible to the other.
+    /// Measured across nineteen sessions — every one had messages in exactly one
+    /// of the two lists, never both. Sending through the older generation and
+    /// reading through the newer showed conversations as empty.
     pub async fn list_messages(
         &self,
         engine_session_id: &str,
     ) -> Result<Vec<Message>, EngineFailure> {
-        let request = self
+        let response = self
             .http
-            .get(self.url(&format!("/api/session/{engine_session_id}/message")));
-        let mut messages = read_envelope::<Vec<Message>>(request, "message list").await?;
-        messages.reverse();
-        Ok(messages)
+            .get(self.url(&format!(
+                "/session/{}/message",
+                urlencode(engine_session_id)
+            )))
+            .send()
+            .await
+            .map_err(to_failure)?;
+        let status = response.status();
+        let body = response.text().await.map_err(to_failure)?;
+        if !status.is_success() {
+            return Err(EngineFailure::Http(format!(
+                "reading the messages failed ({status}): {body}"
+            )));
+        }
+        let wire = serde_json::from_str::<Vec<WireMessage>>(&body).map_err(|e| {
+            EngineFailure::Http(format!("message list unreadable: {e}; body: {body}"))
+        })?;
+        Ok(wire.into_iter().map(Message::from).collect())
     }
 
-    /// Creates a session with its model fixed on the session itself.
+    /// Creates a session, with a model if one is given.
     ///
-    /// The model **must** be set here. The `/prompt` schema has no model field at
-    /// all — slipping one in is silently ignored, and the session falls back to
-    /// the engine's default. On the test machine that default is OpenCode's free
-    /// tier, which refuses to be used outside the OpenCode application, and the
-    /// refusal shows up as a baffling `step.failed`.
+    /// The model given here is only where the session starts. Every prompt names
+    /// its own, so a conversation can change model between turns.
     pub async fn create_session(
         &self,
         model: Option<&Model>,
@@ -495,17 +685,45 @@ impl Client {
             })
     }
 
+    /// Sends a prompt, naming the model that should answer it.
+    ///
+    /// **Through `/session/{id}/prompt_async`, the older of the engine's two
+    /// APIs, deliberately.** The newer `/api/session/{id}/prompt` accepts a turn
+    /// and then never runs it unless the provider's key is in the engine's
+    /// *environment*. A key in OpenCode's own credential store — which is where
+    /// `opencode auth login` and our AI Providers screen both put it — is not
+    /// enough there. Measured on the same engine binary, changing nothing but
+    /// that variable: with the key only in the store, the turn sat unanswered
+    /// with no error anywhere; with it also in the environment, it ran. This
+    /// route runs from the store alone.
+    ///
+    /// Every earlier test passed because the engine was started with the key in
+    /// its environment. An installed application is not.
+    ///
+    /// The model travels with every prompt, so a conversation is not fixed to
+    /// the model it started on. Without one the engine falls back to its own
+    /// default, which on the test machine is OpenCode's free tier — and that
+    /// refuses to run outside the OpenCode application.
     pub async fn send_prompt(
         &self,
         engine_session_id: &str,
         text: &str,
+        model: Option<&Model>,
     ) -> Result<(), EngineFailure> {
+        let body = PromptBody {
+            parts: [PromptPart { kind: "text", text }],
+            model: model.map(|m| PromptModel {
+                provider_id: &m.provider_id,
+                model_id: &m.id,
+            }),
+        };
         let response = self
             .http
-            .post(self.url(&format!("/api/session/{engine_session_id}/prompt")))
-            .json(&PromptBody {
-                prompt: PromptText { text },
-            })
+            .post(self.url(&format!(
+                "/session/{}/prompt_async",
+                urlencode(engine_session_id)
+            )))
+            .json(&body)
             .send()
             .await
             .map_err(to_failure)?;
@@ -520,12 +738,12 @@ impl Client {
         Ok(())
     }
 
-    /// This is what closes the Phase 2 gate: a conversation has to be stoppable
-    /// mid-flight.
+    /// Stops a turn mid-flight. The turn ends with `session.idle` on the stream
+    /// and a `MessageAbortedError` on the message — both measured.
     pub async fn interrupt(&self, engine_session_id: &str) -> Result<(), EngineFailure> {
         let response = self
             .http
-            .post(self.url(&format!("/api/session/{engine_session_id}/interrupt")))
+            .post(self.url(&format!("/session/{}/abort", urlencode(engine_session_id))))
             .send()
             .await
             .map_err(to_failure)?;
@@ -534,7 +752,7 @@ impl Client {
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             return Err(EngineFailure::Http(format!(
-                "interrupting the session failed ({status}): {body}"
+                "stopping the session failed ({status}): {body}"
             )));
         }
         Ok(())
@@ -543,15 +761,16 @@ impl Client {
     /// Opens the event stream and calls `on_chunk` for every event belonging to
     /// this session, until the turn ends or `cancel` goes true.
     ///
-    /// **Uses the global `/api/event`, not `/api/session/{id}/event`.** Both
-    /// exist, and the difference only shows up when you run them: the per-session
-    /// stream is durable and coarse — it sends `text.started` and `text.ended`
-    /// with not one token in between. The global stream is what carries
-    /// `session.next.text.delta`. One real conversation produced 8 events on the
-    /// per-session stream and 63 on the global one.
+    /// **`/event`, the stream that belongs with `prompt_async`.** A turn sent
+    /// through the older API reports its tokens there as `message.part.delta`;
+    /// the newer `/api/event` carried six events for the same turn and not one
+    /// token. Events from other sessions come through too, so they are filtered
+    /// here.
     ///
-    /// The cost: events from other sessions come through too, so they are
-    /// filtered here.
+    /// `ready` fires once the stream is actually open. The caller must wait for
+    /// it before sending the prompt: a short turn can finish — `session.idle`
+    /// and all — before a stream opened afterwards has connected, and then the
+    /// turn's end is never seen and the interface waits forever.
     ///
     /// SSE is parsed by hand rather than with a library: it is only two kinds of
     /// line, and another dependency is not worth it.
@@ -559,6 +778,7 @@ impl Client {
         &self,
         engine_session_id: &str,
         cancel: tokio::sync::watch::Receiver<bool>,
+        ready: Option<tokio::sync::oneshot::Sender<()>>,
         mut on_chunk: F,
     ) -> Result<(), EngineFailure>
     where
@@ -566,7 +786,7 @@ impl Client {
     {
         let response = self
             .http
-            .get(self.url("/api/event"))
+            .get(self.url("/event"))
             .send()
             .await
             .map_err(to_failure)?;
@@ -577,6 +797,9 @@ impl Client {
             return Err(EngineFailure::Http(format!(
                 "event stream rejected ({status}): {body}"
             )));
+        }
+        if let Some(ready) = ready {
+            let _ = ready.send(());
         }
 
         let mut body = response.bytes_stream();
@@ -611,12 +834,11 @@ impl Client {
     }
 }
 
-/// The event that marks the end of a turn.
-///
-/// A turn with tool calls can have several steps; for Release 1, which only needs
-/// one plain conversation, the first step that ends means done. This has to be
-/// revisited as soon as tools arrive.
-const TURN_END: &str = "session.next.step.ended";
+/// The event that marks the end of a turn — every step of it, tool calls
+/// included, and a turn that was stopped as well. Measured: a turn that called
+/// a tool went through two `step-start`/`step-finish` pairs and ended with one
+/// `session.idle`; a stopped turn ended the same way.
+const TURN_END: &str = "session.idle";
 
 /// Parses one SSE block.
 ///
@@ -648,7 +870,12 @@ fn parse_event(block: &str) -> Option<Chunk> {
         .unwrap_or("untyped")
         .to_string();
 
-    let payload = parsed.get("data").cloned().unwrap_or(parsed.clone());
+    // `/event` wraps an event's content in `properties`. Anything without that
+    // is kept whole rather than guessed at.
+    let payload = parsed
+        .get("properties")
+        .cloned()
+        .unwrap_or_else(|| parsed.clone());
 
     let engine_session_id = payload
         .get("sessionID")
@@ -666,37 +893,40 @@ fn parse_event(block: &str) -> Option<Chunk> {
 mod tests {
     use super::*;
 
-    /// This block is copied verbatim from a real OpenCode v1.18.18 stream — not
+    /// Copied verbatim from a real OpenCode v1.18.18 `/event` stream — not
     /// invented from the schema. The first version of this test used an invented
     /// shape with `event:` lines, and passed happily while the code it tested
     /// would never have worked against the real engine.
-    const REAL_BLOCK: &str = r#"data: {"id":"evt_1","type":"session.next.text.delta","durable":{"aggregateID":"ses_abc","seq":7,"version":1},"data":{"timestamp":1789548855918,"sessionID":"ses_abc","text":"ha"}}
+    const REAL_BLOCK: &str = r#"data: {"type":"message.part.delta","properties":{"sessionID":"ses_f4cddf7a8ffewrU6orjt2suKc1","messageID":"msg_0b3220c80001Vryaf1naWLBXAZ","partID":"prt_0b32216bb001PhQsLRTJv24SAG","field":"text","delta":"The user"}}
 
 "#;
 
     #[test]
     fn kind_comes_from_inside_the_json_not_an_event_line() {
         let c = parse_event(REAL_BLOCK).expect("should parse");
-        assert_eq!(c.kind, "session.next.text.delta");
-        assert_eq!(c.engine_session_id.as_deref(), Some("ses_abc"));
-        assert_eq!(c.payload["text"], "ha");
+        assert_eq!(c.kind, "message.part.delta");
+        assert_eq!(
+            c.engine_session_id.as_deref(),
+            Some("ses_f4cddf7a8ffewrU6orjt2suKc1")
+        );
+        assert_eq!(c.payload["delta"], "The user");
     }
 
     #[test]
     fn an_event_without_a_session_still_parses_but_has_no_owner() {
         // The global stream carries things like this too, and they have to be
         // filtered by the caller — not quietly attributed to the active session.
-        let block = r#"data: {"id":"evt_2","type":"plugin.added","data":{"name":"something"}}
+        let block = r#"data: {"type":"server.heartbeat","properties":{}}
 
 "#;
         let c = parse_event(block).expect("should parse");
-        assert_eq!(c.kind, "plugin.added");
+        assert_eq!(c.kind, "server.heartbeat");
         assert_eq!(c.engine_session_id, None);
     }
 
     #[test]
     fn multi_line_data_is_joined() {
-        let block = "data: {\"type\":\"x\",\ndata: \"data\":{\"sessionID\":\"ses_1\"}}\n\n";
+        let block = "data: {\"type\":\"x\",\ndata: \"properties\":{\"sessionID\":\"ses_1\"}}\n\n";
         let c = parse_event(block).expect("should parse");
         assert_eq!(c.kind, "x");
         assert_eq!(c.engine_session_id.as_deref(), Some("ses_1"));
@@ -715,11 +945,106 @@ mod tests {
     }
 
     #[test]
-    fn the_turn_ends_on_step_ended() {
-        let block = r#"data: {"type":"session.next.step.ended","data":{"sessionID":"ses_abc"}}
+    fn the_turn_ends_on_session_idle() {
+        let block = r#"data: {"type":"session.idle","properties":{"sessionID":"ses_abc"}}
 
 "#;
         let c = parse_event(block).expect("should parse");
         assert_eq!(c.kind, TURN_END);
+        assert_eq!(c.engine_session_id.as_deref(), Some("ses_abc"));
+    }
+
+    /// Both of the engine's message shapes, from a real capture: a user message
+    /// names its model as an object, an assistant message as two flat fields.
+    #[test]
+    fn messages_are_flattened_from_info_and_parts() {
+        let wire = r#"[
+          {"info":{"id":"msg_u","sessionID":"ses_1","role":"user","time":{"created":1},
+                   "agent":"build","model":{"providerID":"minimax","modelID":"MiniMax-M2.5"}},
+           "parts":[{"id":"prt_1","type":"text","text":"Count from 1 to 5."}]},
+          {"info":{"id":"msg_a","sessionID":"ses_1","role":"assistant","time":{"created":2,"completed":3},
+                   "modelID":"MiniMax-M2.5","providerID":"minimax","finish":"stop"},
+           "parts":[{"id":"prt_2","type":"step-start"},
+                    {"id":"prt_3","type":"reasoning","text":"thinking"},
+                    {"id":"prt_4","type":"tool","tool":"read","callID":"call_1",
+                     "state":{"status":"completed","title":"README.md","input":{},"output":"x","metadata":{},"time":{}}},
+                    {"id":"prt_5","type":"text","text":"1 2 3 4 5"},
+                    {"id":"prt_6","type":"step-finish","reason":"stop"}]}
+        ]"#;
+        let messages: Vec<Message> = serde_json::from_str::<Vec<WireMessage>>(wire)
+            .expect("the captured shape should parse")
+            .into_iter()
+            .map(Message::from)
+            .collect();
+
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[0].text.as_deref(), Some("Count from 1 to 5."));
+        assert_eq!(
+            messages[0].model.as_ref().map(|m| m.id.as_str()),
+            Some("MiniMax-M2.5")
+        );
+
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[1].text, None);
+        assert_eq!(messages[1].finish.as_deref(), Some("stop"));
+        assert_eq!(
+            messages[1].model.as_ref().map(|m| m.provider_id.as_str()),
+            Some("minimax")
+        );
+        assert!(matches!(messages[1].content[3], Part::Text { .. }));
+        assert!(matches!(messages[1].content[2], Part::Tool { .. }));
+        assert!(matches!(messages[1].content[0], Part::Other));
+    }
+
+    /// Only connected providers, the free tier last, each provider's default
+    /// first, and the key that rides along in the same response never read.
+    #[test]
+    fn models_come_from_connected_providers_with_the_free_tier_last() {
+        let body = r#"{
+          "all": [
+            {"id":"opencode","models":{"big-pickle":{"id":"big-pickle"}}},
+            {"id":"minimax","key":"sk-must-never-be-read","models":{"MiniMax-M2.5":{"id":"MiniMax-M2.5"},"MiniMax-M2.1":{}}},
+            {"id":"anthropic","models":{"claude-opus-5":{}}}
+          ],
+          "connected": ["opencode","minimax"],
+          "default": {"minimax":"MiniMax-M2.5","opencode":"big-pickle"}
+        }"#;
+        let models = serde_json::from_str::<WireCatalogue>(body)
+            .expect("parses")
+            .usable_models();
+        let names: Vec<String> = models
+            .iter()
+            .map(|m| format!("{}/{}", m.provider_id, m.id))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "minimax/MiniMax-M2.5",
+                "minimax/MiniMax-M2.1",
+                "opencode/big-pickle"
+            ]
+        );
+    }
+
+    /// `modelID`, not `id` — the engine refuses extra fields on this object.
+    #[test]
+    fn a_prompt_names_its_model_the_way_the_engine_expects() {
+        let body = PromptBody {
+            parts: [PromptPart {
+                kind: "text",
+                text: "hi",
+            }],
+            model: Some(PromptModel {
+                provider_id: "minimax",
+                model_id: "MiniMax-M2.5",
+            }),
+        };
+        assert_eq!(
+            serde_json::to_value(&body).expect("serialises"),
+            serde_json::json!({
+                "parts": [{ "type": "text", "text": "hi" }],
+                "model": { "providerID": "minimax", "modelID": "MiniMax-M2.5" }
+            })
+        );
     }
 }

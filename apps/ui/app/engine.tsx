@@ -93,9 +93,8 @@ export function EnginePanel({ workingDir }: { workingDir: string }) {
       if (!providerID || !id) {
         throw new Error("pick a model first");
       }
-      // The model is fixed on the session, not on the prompt. The prompt schema
-      // has no model field, and a session without one falls back to the engine's
-      // default — whose failure never appears on the event stream at all.
+      // The session starts on this model, and every prompt names it again —
+      // a conversation can change model between turns.
       setSessionId(await unwrap(commands.createEngineSession({ providerID, id })));
       setChunks([]);
       setFinished(null);
@@ -107,8 +106,10 @@ export function EnginePanel({ workingDir }: { workingDir: string }) {
       setChunks([]);
       setFinished(null);
       setStreaming(true);
+      const [providerID, ...rest] = selectedModel.split("/");
+      const model = providerID && rest.length ? { providerID, id: rest.join("/") } : null;
       try {
-        await unwrap(commands.sendPrompt(sessionId, text));
+        await unwrap(commands.sendPrompt(sessionId, text, model));
       } catch (e) {
         setStreaming(false);
         throw e;
