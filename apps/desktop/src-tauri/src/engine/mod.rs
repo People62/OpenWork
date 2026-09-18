@@ -658,4 +658,167 @@ mod conversation_tests {
             );
         }
     }
+
+    /// The Phase 5 gate: ask something, get an answer, close the application,
+    /// open it again, and the answer is still there.
+    ///
+    /// The engine is stopped and started again in the middle on purpose. Rantai
+    /// keeps no copy of a conversation — OpenCode does — so "it is still there"
+    /// is only a real claim if it survives the process that wrote it. Reading it
+    /// back from the same live engine would pass just as well against an
+    /// in-memory cache, and prove nothing.
+    #[tokio::test]
+    async fn an_answer_survives_the_engine_being_restarted() {
+        let Some((binary, model)) = live_model() else {
+            eprintln!("skipped: RANTAI_OPENCODE_TEST and RANTAI_MODEL_TEST are not set");
+            return;
+        };
+        let root = repository_root();
+        let engine = Engine::default();
+
+        // --- first run: ask, and wait for a real answer -------------------
+        let address = start_with_override(&engine, &root, &binary).await;
+        let client = client::Client::new(address);
+
+        let session = client
+            .create_session(Some(&model))
+            .await
+            .expect("creating the session failed");
+
+        let asked = "Reply with exactly one word: halo";
+        let (_cancel_send, cancel_receive) = tokio::sync::watch::channel(false);
+        let stream_client = client.clone();
+        let stream_session = session.id.clone();
+        let streaming = tokio::spawn(async move {
+            stream_client
+                .stream(&stream_session, cancel_receive, |_| {})
+                .await
+        });
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        client
+            .send_prompt(&session.id, asked)
+            .await
+            .expect("the prompt was rejected");
+
+        // The stream returns when the turn ends. Waiting on it rather than on a
+        // timer is what makes this test about the answer instead of about how
+        // fast the model happens to be today.
+        tokio::time::timeout(Duration::from_secs(180), streaming)
+            .await
+            .expect("the turn did not end within 180 seconds")
+            .expect("the streaming task panicked")
+            .expect("the stream failed");
+
+        let before = client
+            .list_messages(&session.id)
+            .await
+            .expect("reading the messages failed");
+        let answer = assistant_text(&before);
+        assert!(
+            !answer.is_empty(),
+            "the turn ended with no assistant text; what is there: {:?}",
+            before
+                .iter()
+                .map(|m| (&m.role, &m.finish))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            before.first().map(|m| m.role.as_str()),
+            Some("user"),
+            "messages should arrive oldest first"
+        );
+
+        // --- the application closes ---------------------------------------
+        let pid = engine.live.lock().await.as_ref().and_then(|l| l.child.id());
+        engine.stop().await.expect("stopping failed");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if let Some(pid) = pid {
+            assert!(
+                !super::process_tests::process_exists(pid),
+                "process {pid} orphaned"
+            );
+        }
+
+        // --- it opens again ------------------------------------------------
+        let address = start_with_override(&engine, &root, &binary).await;
+        let reopened = client::Client::new(address);
+
+        let sessions = reopened
+            .list_sessions(Some(&root.display().to_string()))
+            .await
+            .expect("listing the sessions failed");
+        assert!(
+            sessions.iter().any(|s| s.id == session.id),
+            "the session is gone after a restart; {} others are listed",
+            sessions.len()
+        );
+
+        let after = reopened
+            .list_messages(&session.id)
+            .await
+            .expect("reading the messages failed");
+        assert_eq!(
+            assistant_text(&after),
+            answer,
+            "the answer changed across the restart"
+        );
+        assert!(
+            after.iter().any(|m| m.text.as_deref() == Some(asked)),
+            "the question is gone after a restart"
+        );
+
+        engine.stop().await.expect("stopping failed");
+    }
+
+    /// Every `text` part of every assistant message, joined.
+    fn assistant_text(messages: &[client::Message]) -> String {
+        messages
+            .iter()
+            .filter(|m| m.role == "assistant")
+            .flat_map(|m| &m.content)
+            .filter_map(|part| match part {
+                client::Part::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    fn live_model() -> Option<(PathBuf, client::Model)> {
+        let binary = PathBuf::from(std::env::var_os("RANTAI_OPENCODE_TEST")?);
+        if !binary.is_file() {
+            return None;
+        }
+        let text = std::env::var("RANTAI_MODEL_TEST").ok()?;
+        let (provider_id, id) = text.split_once('/')?;
+        Some((
+            binary,
+            client::Model {
+                provider_id: provider_id.to_string(),
+                id: id.to_string(),
+            },
+        ))
+    }
+
+    /// The repository root: three levels above `src-tauri`. Provider
+    /// availability depends on the working directory, and the root is the folder
+    /// OpenCode recognises as a project.
+    fn repository_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .expect("could not find the repository root")
+    }
+
+    async fn start_with_override(engine: &Engine, root: &Path, binary: &Path) -> String {
+        // SAFETY: these tests run serially via --test-threads=1.
+        unsafe { std::env::set_var(locate::ENV_OVERRIDE, binary) };
+        let status = engine.start(root, None).await;
+        unsafe { std::env::remove_var(locate::ENV_OVERRIDE) };
+        status
+            .expect("the engine should start")
+            .address
+            .expect("address")
+    }
 }
