@@ -40,7 +40,7 @@ function Workspace() {
     const content = draft.trim();
     if (!content) return;
     setDraft("");
-    await state.addMessage("user", content);
+    await state.send(content);
   }
 
   return (
@@ -89,14 +89,20 @@ function Workspace() {
 
       {session ? (
         <>
-          <Conversation messages={state.messages} />
+          <Conversation
+            messages={state.messages}
+            streaming={state.streaming}
+            pending={state.pending}
+          />
           <div className="shrink-0 px-2 pb-4 md:px-10">
             <div className="mx-auto w-full max-w-3xl">
               <Composer
                 value={draft}
                 onChange={setDraft}
                 onSend={() => void send()}
-                disabled={state.busy}
+                onStop={() => void state.stop()}
+                busy={state.running}
+                disabled={state.busy && !state.running}
                 placeholder="Reply…"
               />
             </div>

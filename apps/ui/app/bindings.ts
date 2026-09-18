@@ -16,15 +16,13 @@ export const commands = {
 	smokeExpectations: () => __TAURI_INVOKE<SmokeExpectations>("smoke_expectations"),
 	createWorkspace: (name: string, path: string) => typedError<Workspace, Error>(__TAURI_INVOKE("create_workspace", { name, path })),
 	listWorkspaces: () => typedError<Workspace[], Error>(__TAURI_INVOKE("list_workspaces")),
-	createSession: (workspaceId: string, title: string) => typedError<Session, Error>(__TAURI_INVOKE("create_session", { workspaceId, title })),
-	listSessions: (workspaceId: string) => typedError<Session[], Error>(__TAURI_INVOKE("list_sessions", { workspaceId })),
-	addMessage: (sessionId: string, role: Role, content: string) => typedError<Message, Error>(__TAURI_INVOKE("add_message", { sessionId, role, content })),
-	listMessages: (sessionId: string) => typedError<Message[], Error>(__TAURI_INVOKE("list_messages", { sessionId })),
 	/**
-	 *  Writes a workspace, a session and a message, reads them back, then rolls all
-	 *  of it away. The transaction is rolled back when `tx` drops, so no rows are
-	 *  left behind — but the migrations, the foreign keys, the CHECK constraints and
-	 *  the real read-write path are all genuinely exercised.
+	 *  Writes a workspace, reads it back, then rolls it away. The transaction is
+	 *  rolled back when `tx` drops, so no rows are left behind — but the migrations
+	 *  and the real read-write path are genuinely exercised.
+	 * 
+	 *  It used to write a session and a message too. Neither is ours to write any
+	 *  more: OpenCode owns conversations, and the tables that held them are gone.
 	 * 
 	 *  Called when the application opens, not only in CI: a corrupt or read-only
 	 *  database is better found now than when the user presses their first button.
@@ -41,6 +39,20 @@ export const commands = {
 	 *  none, depending on whether OpenCode recognises it as a project.
 	 */
 	listModels: () => typedError<Model[], EngineError>(__TAURI_INVOKE("list_models")),
+	/**
+	 *  Every session the engine holds for `directory`, newest first.
+	 * 
+	 *  Rantai has no session table. OpenCode already stores sessions and their
+	 *  messages, and that store is the one the model reads as context for the next
+	 *  turn — keeping a second copy would mean the screen and the model could come
+	 *  to disagree about what was said.
+	 * 
+	 *  `directory` is honoured for reading no matter where the engine itself is
+	 *  working, so the whole sidebar is served by one process.
+	 */
+	listEngineSessions: (directory: string | null) => typedError<EngineSession[], EngineError>(__TAURI_INVOKE("list_engine_sessions", { directory })),
+	/**  The conversation in a session, oldest first. */
+	listEngineMessages: (engineSessionId: string) => typedError<Message_Serialize[], EngineError>(__TAURI_INVOKE("list_engine_messages", { engineSessionId })),
 	/**
 	 *  Creates an engine session with its model fixed on the session.
 	 * 
@@ -144,8 +156,6 @@ export type Chunk = {
 export type DatabaseCheck = {
 	writeReadIntact: boolean,
 	workspaceCount: number,
-	sessionCount: number,
-	messageCount: number,
 };
 
 /**
@@ -187,23 +197,41 @@ export type EngineError = {
 	message: string,
 };
 
+/**
+ *  A session as the engine reports it.
+ * 
+ *  Rantai keeps no session table of its own. OpenCode already stores every one
+ *  of these fields — title, model, cost, tokens, times — in its own SQLite, and
+ *  it is the copy the model reads as context for the next turn. A second copy
+ *  on our side would be the one on screen while the engine answered from the
+ *  other, and the two would part company the first time a stream broke.
+ */
+export type EngineSession = {
+	id: string,
+	/**
+	 *  The engine names a new session itself and renames it once there is
+	 *  something to name it after, so this changes under us. It is read, never
+	 *  written.
+	 */
+	title?: string,
+	model?: Model | null,
+	time: SessionTime,
+	location?: SessionLocation | null,
+};
+
 export type EngineStatus = {
 	running: boolean,
 	address: string | null,
 	binaryPath: string | null,
 	source: string | null,
 	uptimeSeconds: number | null,
+	/**  The folder the running engine works in, if it is running. */
+	workingDir: string | null,
 };
 
 export type Error = 
 /**  The database refused, failed to open, or its migrations did not run. */
 { kind: "database"; message: string } | 
-/**
- *  What was asked for does not exist. Kept apart from `Database` because the
- *  interface usually wants to treat it differently — not a failure, just
- *  empty.
- */
-{ kind: "notFound"; message: string } | 
 /**
  *  Input from the interface makes no sense before it ever reaches the
  *  database.
@@ -225,12 +253,66 @@ export type Greeting = {
 	appVersion: string,
 };
 
-export type Message = {
+/**
+ *  One message in a conversation.
+ * 
+ *  The two kinds are not the same shape, and flattening them would lose the
+ *  difference: a user message carries flat `text`, an assistant message carries
+ *  a list of typed parts. Both are kept as the engine gives them.
+ */
+export type Message = Message_Serialize | Message_Deserialize;
+
+export type MessageTime = {
+	created: number,
+	completed?: number | null,
+};
+
+/**
+ *  One message in a conversation.
+ * 
+ *  The two kinds are not the same shape, and flattening them would lose the
+ *  difference: a user message carries flat `text`, an assistant message carries
+ *  a list of typed parts. Both are kept as the engine gives them.
+ */
+export type Message_Deserialize = {
 	id: string,
-	sessionId: string,
-	role: Role,
-	content: string,
-	createdAt: number,
+	/**
+	 *  `"user"` or `"assistant"`. Not an enum: the engine decides what kinds
+	 *  exist, and a value we have not met should not fail the whole list.
+	 */
+	type: string,
+	time: MessageTime,
+	/**  Set on user messages. */
+	text?: string | null,
+	/**  Set on assistant messages. */
+	content?: Part_Deserialize[],
+	/**  `"stop"`, `"error"`, and whatever else the engine reports. */
+	finish?: string | null,
+	error?: unknown | null,
+};
+
+/**
+ *  One message in a conversation.
+ * 
+ *  The two kinds are not the same shape, and flattening them would lose the
+ *  difference: a user message carries flat `text`, an assistant message carries
+ *  a list of typed parts. Both are kept as the engine gives them.
+ */
+export type Message_Serialize = {
+	id: string,
+	/**
+	 *  `"user"` or `"assistant"`. Not an enum: the engine decides what kinds
+	 *  exist, and a value we have not met should not fail the whole list.
+	 */
+	type: string,
+	time: MessageTime,
+	/**  Set on user messages. */
+	text: string | null,
+	/**  Set on assistant messages. */
+	content: Part_Serialize[],
+	/**  `"stop"`, `"error"`, and whatever else the engine reports. */
+	finish: string | null,
+	error: unknown | null,
 };
 
 /**
@@ -245,6 +327,49 @@ export type Model = {
 	id: string,
 };
 
+/**
+ *  A piece of an assistant message.
+ * 
+ *  `Other` is load-bearing. The engine's storage holds `step-start` and
+ *  `step-finish` alongside these, and will hold kinds that do not exist yet —
+ *  an enum without a catch-all would fail to parse the whole conversation the
+ *  first time one appeared.
+ */
+export type Part = Part_Serialize | Part_Deserialize;
+
+/**
+ *  A piece of an assistant message.
+ * 
+ *  `Other` is load-bearing. The engine's storage holds `step-start` and
+ *  `step-finish` alongside these, and will hold kinds that do not exist yet —
+ *  an enum without a catch-all would fail to parse the whole conversation the
+ *  first time one appeared.
+ */
+export type Part_Deserialize = ({ text: {
+	type: "text",
+	text?: string,
+} }) & { other?: never; reasoning?: never; tool?: never } | ({ reasoning: {
+	type: "reasoning",
+	text?: string,
+} }) & { other?: never; text?: never; tool?: never } | ({ tool: {
+	type: "tool",
+	tool: string,
+	callID: string,
+	state: ToolState,
+} }) & { other?: never; reasoning?: never; text?: never } | ({ other: {
+	type: string,
+} }) & { reasoning?: never; text?: never; tool?: never };
+
+/**
+ *  A piece of an assistant message.
+ * 
+ *  `Other` is load-bearing. The engine's storage holds `step-start` and
+ *  `step-finish` alongside these, and will hold kinds that do not exist yet —
+ *  an enum without a catch-all would fail to parse the whole conversation the
+ *  first time one appeared.
+ */
+export type Part_Serialize = ({ type: "text"; text: string }) & { callID?: never; state?: never; tool?: never } | ({ type: "reasoning"; text: string }) & { callID?: never; state?: never; tool?: never } | ({ type: "tool"; tool: string; callID: string; state: ToolState }) & { text?: never } | ({ type: "other" }) & { callID?: never; state?: never; text?: never; tool?: never };
+
 export type PersistenceCheck = {
 	/**  "write" on the first run, "read" on the second. */
 	mode: string,
@@ -255,14 +380,17 @@ export type PersistenceCheck = {
 	marker: string,
 };
 
-export type Role = "user" | "assistant";
+/**
+ *  Which folder the session belongs to. This is how a session is tied to a
+ *  workspace: there is no id linking them, only the path.
+ */
+export type SessionLocation = {
+	directory?: string | null,
+};
 
-export type Session = {
-	id: string,
-	workspaceId: string,
-	title: string,
-	createdAt: number,
-	updatedAt: number,
+export type SessionTime = {
+	created: number,
+	updated: number,
 };
 
 /**
@@ -281,6 +409,18 @@ export type SmokeExpectations = {
 	deepLink: string | null,
 	/**  When set, the interface must write or read data under this marker. */
 	persistence: PersistenceCheck | null,
+};
+
+export type ToolState = {
+	/**  `"pending"`, `"running"`, `"completed"`, `"error"`. */
+	status: string,
+	title?: string | null,
+	/**
+	 *  Left as JSON: every tool has its own argument shape, and writing them
+	 *  down here would promise a contract the tools own, not us.
+	 */
+	input?: unknown | null,
+	output?: string | null,
 };
 
 export type UpdateAvailable = {

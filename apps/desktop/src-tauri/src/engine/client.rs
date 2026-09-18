@@ -42,10 +42,126 @@ struct Envelope<T> {
     data: T,
 }
 
+/// A session as the engine reports it.
+///
+/// Rantai keeps no session table of its own. OpenCode already stores every one
+/// of these fields — title, model, cost, tokens, times — in its own SQLite, and
+/// it is the copy the model reads as context for the next turn. A second copy
+/// on our side would be the one on screen while the engine answered from the
+/// other, and the two would part company the first time a stream broke.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineSession {
     pub id: String,
+    /// The engine names a new session itself and renames it once there is
+    /// something to name it after, so this changes under us. It is read, never
+    /// written.
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub model: Option<Model>,
+    pub time: SessionTime,
+    #[serde(default)]
+    pub location: Option<SessionLocation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTime {
+    #[specta(type = specta_typescript::Number)]
+    pub created: i64,
+    #[specta(type = specta_typescript::Number)]
+    pub updated: i64,
+}
+
+/// Which folder the session belongs to. This is how a session is tied to a
+/// workspace: there is no id linking them, only the path.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLocation {
+    #[serde(default)]
+    pub directory: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageTime {
+    #[specta(type = specta_typescript::Number)]
+    pub created: i64,
+    #[specta(type = Option<specta_typescript::Number>)]
+    #[serde(default)]
+    pub completed: Option<i64>,
+}
+
+/// One message in a conversation.
+///
+/// The two kinds are not the same shape, and flattening them would lose the
+/// difference: a user message carries flat `text`, an assistant message carries
+/// a list of typed parts. Both are kept as the engine gives them.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Message {
+    pub id: String,
+    /// `"user"` or `"assistant"`. Not an enum: the engine decides what kinds
+    /// exist, and a value we have not met should not fail the whole list.
+    #[serde(rename = "type")]
+    pub role: String,
+    pub time: MessageTime,
+    /// Set on user messages.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Set on assistant messages.
+    #[serde(default)]
+    pub content: Vec<Part>,
+    /// `"stop"`, `"error"`, and whatever else the engine reports.
+    #[serde(default)]
+    pub finish: Option<String>,
+    #[specta(type = Option<specta_typescript::Unknown>)]
+    #[serde(default)]
+    pub error: Option<serde_json::Value>,
+}
+
+/// A piece of an assistant message.
+///
+/// `Other` is load-bearing. The engine's storage holds `step-start` and
+/// `step-finish` alongside these, and will hold kinds that do not exist yet —
+/// an enum without a catch-all would fail to parse the whole conversation the
+/// first time one appeared.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum Part {
+    Text {
+        #[serde(default)]
+        text: String,
+    },
+    Reasoning {
+        #[serde(default)]
+        text: String,
+    },
+    Tool {
+        tool: String,
+        #[serde(rename = "callID")]
+        call_id: String,
+        state: ToolState,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolState {
+    /// `"pending"`, `"running"`, `"completed"`, `"error"`.
+    pub status: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Left as JSON: every tool has its own argument shape, and writing them
+    /// down here would promise a contract the tools own, not us.
+    #[specta(type = Option<specta_typescript::Unknown>)]
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
+    #[serde(default)]
+    pub output: Option<String>,
 }
 
 /// A model that is actually available, as reported by the engine.
@@ -98,6 +214,29 @@ pub struct Chunk {
     pub payload: serde_json::Value,
 }
 
+/// Sends a request and unwraps `{"data": ...}`.
+///
+/// The body is kept and put in the error. A parse failure with only serde's
+/// message ("missing field `time` at line 1 column 240") is nearly useless
+/// against an API whose shapes move between versions; the body says which
+/// shape actually arrived.
+async fn read_envelope<T: serde::de::DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+    what: &str,
+) -> Result<T, EngineFailure> {
+    let response = request.send().await.map_err(to_failure)?;
+    let status = response.status();
+    let body = response.text().await.map_err(to_failure)?;
+    if !status.is_success() {
+        return Err(EngineFailure::Http(format!(
+            "reading the {what} failed ({status}): {body}"
+        )));
+    }
+    serde_json::from_str::<Envelope<T>>(&body)
+        .map(|e| e.data)
+        .map_err(|e| EngineFailure::Http(format!("{what} unreadable: {e}; body: {body}")))
+}
+
 impl Client {
     pub fn new(address: impl Into<String>) -> Self {
         Self {
@@ -141,6 +280,46 @@ impl Client {
         serde_json::from_str::<Envelope<Vec<Model>>>(&body)
             .map(|e| e.data)
             .map_err(|e| EngineFailure::Http(format!("model list unreadable: {e}; body: {body}")))
+    }
+
+    /// Every session the engine knows about in `directory`.
+    ///
+    /// **Reading is not bound to the engine's working directory; writing is.**
+    /// `?directory=` filters the list to any folder, so one engine serves the
+    /// whole sidebar. Creating a session and running a turn ignore the parameter
+    /// entirely and land in the engine's own cwd — measured, not assumed: a
+    /// create aimed at another folder came back located in the engine's.
+    pub async fn list_sessions(
+        &self,
+        directory: Option<&str>,
+    ) -> Result<Vec<EngineSession>, EngineFailure> {
+        // Built through `Url` rather than `RequestBuilder::query`: reqwest is
+        // pulled in with `default-features = false` here, deliberately, and the
+        // query helper is not in that set. Turning a feature back on to save
+        // three lines is how this crate broke every HTTP client once already.
+        let mut url = reqwest::Url::parse(&self.url("/api/session"))
+            .map_err(|e| EngineFailure::Http(format!("session list url invalid: {e}")))?;
+        if let Some(directory) = directory {
+            url.query_pairs_mut().append_pair("directory", directory);
+        }
+        read_envelope::<Vec<EngineSession>>(self.http.get(url), "session list").await
+    }
+
+    /// The messages in a session, oldest first.
+    ///
+    /// The engine returns them newest first — both this list and the session
+    /// list are descending. Reversing here rather than on screen keeps the one
+    /// place that knows about the engine's ordering next to the engine.
+    pub async fn list_messages(
+        &self,
+        engine_session_id: &str,
+    ) -> Result<Vec<Message>, EngineFailure> {
+        let request = self
+            .http
+            .get(self.url(&format!("/api/session/{engine_session_id}/message")));
+        let mut messages = read_envelope::<Vec<Message>>(request, "message list").await?;
+        messages.reverse();
+        Ok(messages)
     }
 
     /// Creates a session with its model fixed on the session itself.

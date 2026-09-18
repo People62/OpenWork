@@ -149,7 +149,7 @@ export function WorkspaceSidebar({ state, onNewTask }: WorkspaceSidebarProps) {
                           onClick={() => state.selectSession(session)}
                           trailing={
                             <span className="text-muted-foreground shrink-0 text-[11px]">
-                              {relativeAge(session.updatedAt)}
+                              {relativeAge(session.time.updated)}
                             </span>
                           }
                         >

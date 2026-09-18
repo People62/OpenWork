@@ -13,7 +13,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri_specta::Event;
 use tokio::sync::Mutex;
 
-use crate::engine::client::{Chunk, Client, Model};
+use crate::engine::client::{Chunk, Client, EngineSession, Message, Model};
 use crate::engine::{Engine, EngineError, EngineStatus};
 
 /// Emitted when the stream stops — finished on its own, cancelled, or failed.
@@ -66,6 +66,36 @@ pub async fn stop_engine(engine: State<'_, Engine>) -> Result<EngineStatus, Engi
 pub async fn list_models(engine: State<'_, Engine>) -> Result<Vec<Model>, EngineError> {
     let client = Client::new(engine.address().await?);
     Ok(client.list_models().await?)
+}
+
+/// Every session the engine holds for `directory`, newest first.
+///
+/// Rantai has no session table. OpenCode already stores sessions and their
+/// messages, and that store is the one the model reads as context for the next
+/// turn — keeping a second copy would mean the screen and the model could come
+/// to disagree about what was said.
+///
+/// `directory` is honoured for reading no matter where the engine itself is
+/// working, so the whole sidebar is served by one process.
+#[tauri::command]
+#[specta::specta]
+pub async fn list_engine_sessions(
+    directory: Option<String>,
+    engine: State<'_, Engine>,
+) -> Result<Vec<EngineSession>, EngineError> {
+    let client = Client::new(engine.address().await?);
+    Ok(client.list_sessions(directory.as_deref()).await?)
+}
+
+/// The conversation in a session, oldest first.
+#[tauri::command]
+#[specta::specta]
+pub async fn list_engine_messages(
+    engine_session_id: String,
+    engine: State<'_, Engine>,
+) -> Result<Vec<Message>, EngineError> {
+    let client = Client::new(engine.address().await?);
+    Ok(client.list_messages(&engine_session_id).await?)
 }
 
 /// Creates an engine session with its model fixed on the session.

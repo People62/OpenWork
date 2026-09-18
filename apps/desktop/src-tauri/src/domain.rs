@@ -1,9 +1,15 @@
-// The core domain model — the counterparts of workspace, session, and message.
+// The part of the domain Rantai actually owns.
 //
-// This is the Release 1 backbone and no more: open a workspace, create a session
-// inside it, then hold one conversation that is saved and can be reopened. MCP,
-// approvals, artifacts, skills and the rest are leaves on the same trunk, and
-// not one of them holds it up.
+// Only the workspace. It once held sessions and messages too, and they were
+// removed the day it turned out OpenCode already stores both — with the title,
+// the model, the cost, the token counts, the reasoning and the tool calls, in
+// the same store the model reads as context for its next turn. Keeping a second
+// copy meant the screen and the model could come to disagree about what was
+// said, and nothing would say which one was right.
+//
+// So a workspace is what is left: a folder a person chose, under a name they
+// chose. OpenCode derives its own `project` from the path and has no place for
+// the name, which is exactly why this row still has to exist.
 //
 // Every type here derives `specta::Type`, and that is where its TypeScript
 // counterpart comes from. No type is ever written twice.
@@ -13,6 +19,8 @@ use specta::Type;
 
 /// Time is stored as Unix milliseconds. SQLite has no native time type, and an
 /// integer sidesteps the whole business of timezone parsing at the boundary.
+/// The engine reports its times the same way, so the two line up without
+/// conversion.
 pub type Millis = i64;
 
 /// Specta refuses to export i64 to TypeScript because `number` loses precision
@@ -35,53 +43,6 @@ pub struct Workspace {
     /// A real folder on disk. This is what makes a workspace more than a row in
     /// a database.
     pub path: String,
-    #[specta(type = specta_typescript::Number)]
-    pub created_at: Millis,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct Session {
-    pub id: String,
-    pub workspace_id: String,
-    pub title: String,
-    #[specta(type = specta_typescript::Number)]
-    pub created_at: Millis,
-    #[specta(type = specta_typescript::Number)]
-    pub updated_at: Millis,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    User,
-    Assistant,
-}
-
-impl Role {
-    pub fn as_text(self) -> &'static str {
-        match self {
-            Role::User => "user",
-            Role::Assistant => "assistant",
-        }
-    }
-
-    pub fn from_text(text: &str) -> Option<Self> {
-        match text {
-            "user" => Some(Role::User),
-            "assistant" => Some(Role::Assistant),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct Message {
-    pub id: String,
-    pub session_id: String,
-    pub role: Role,
-    pub content: String,
     #[specta(type = specta_typescript::Number)]
     pub created_at: Millis,
 }

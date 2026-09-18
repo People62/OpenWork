@@ -90,19 +90,23 @@ export function SmokeRunner() {
   return null;
 }
 
-/// Writes marked data, or reads it back and demands it is intact.
+/// Writes a marked workspace, or reads it back and demands it is intact.
 ///
 /// Run across two different processes. A test inside one process can pass
 /// entirely from an in-memory cache without a single byte touching disk — and
 /// "can be reopened after the application closes" is exactly what Release 1
 /// promises.
+///
+/// It used to write a session and a message too. Neither is ours to write any
+/// more: OpenCode stores conversations, and proving *those* survive would mean
+/// a running engine in both processes — which the sibling check deliberately
+/// denies, since it exists to prove the application survives the engine being
+/// missing. So this now claims exactly what it tests, and no more.
 async function provePersistence(mode: string, marker: string): Promise<void> {
-  const content = `content-${marker}`;
+  const path = `/smoke/${marker}`;
 
   if (mode === "write") {
-    const workspace = await unwrap(commands.createWorkspace(marker, `/smoke/${marker}`));
-    const session = await unwrap(commands.createSession(workspace.id, marker));
-    await unwrap(commands.addMessage(session.id, "user", content));
+    await unwrap(commands.createWorkspace(marker, path));
     return;
   }
 
@@ -114,25 +118,10 @@ async function provePersistence(mode: string, marker: string): Promise<void> {
       `no workspace marked ${marker} after the application was restarted — the data did not survive`,
     );
   }
-
-  const session = (await unwrap(commands.listSessions(workspace.id))).find(
-    (s) => s.title === marker,
-  );
-  if (!session) {
-    throw new Error(`the workspace survived but its session is gone: ${marker}`);
-  }
-
-  const messages = await unwrap(commands.listMessages(session.id));
-  const match = messages.find((m) => m.content === content);
-  if (!match) {
+  if (workspace.path !== path) {
     throw new Error(
-      `the session survived but its message is gone; what is there: ${
-        messages.map((m) => m.content).join(", ") || "(empty)"
-      }`,
+      `the workspace survived but its path changed: ${workspace.path} instead of ${path}`,
     );
-  }
-  if (match.role !== "user") {
-    throw new Error(`the message role changed to ${match.role}`);
   }
 }
 
