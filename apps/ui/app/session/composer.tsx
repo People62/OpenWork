@@ -1,13 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import {
-  ArrowUpIcon,
-  ChevronDownIcon,
-  PaperclipIcon,
-  PlusIcon,
-  SquareIcon,
-} from "lucide-react";
+import { ArrowUpIcon, PaperclipIcon, PlusIcon, SquareIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -33,9 +27,8 @@ export type ComposerProps = {
   busy?: boolean;
   disabled?: boolean;
   placeholder?: string;
-  /** What the model picker reads. */
-  modelLabel?: string;
-  onPickModel?: () => void;
+  /** Rendered between the tool buttons and the send control. */
+  modelPicker?: React.ReactNode;
   autoFocus?: boolean;
 };
 
@@ -84,16 +77,7 @@ export function Composer(props: ComposerProps) {
           <PaperclipIcon size={16} />
         </ComposerTool>
 
-        {props.modelLabel ? (
-          <button
-            type="button"
-            onClick={props.onPickModel}
-            className="text-muted-foreground hover:bg-dls-hover hover:text-foreground inline-flex h-9 min-w-0 items-center gap-1 rounded-md px-2 text-[13px] transition-colors"
-          >
-            <span className="truncate">{props.modelLabel}</span>
-            <ChevronDownIcon size={14} className="shrink-0" />
-          </button>
-        ) : null}
+        {props.modelPicker}
 
         <div className="ms-auto flex shrink-0 items-center gap-1.5">
           <button

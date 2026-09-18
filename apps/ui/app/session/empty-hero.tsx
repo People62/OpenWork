@@ -49,7 +49,8 @@ export type EmptyHeroProps = {
   /** Given the written prompt. The caller creates the session. */
   onRunTask: (prompt: string) => void;
   busy?: boolean;
-  modelLabel?: string;
+  /** The model picker, rendered inside the composer's control row. */
+  modelPicker?: React.ReactNode;
 };
 
 export function EmptyHero(props: EmptyHeroProps) {
@@ -76,7 +77,7 @@ export function EmptyHero(props: EmptyHeroProps) {
           props.onRunTask(prompt);
         }}
         disabled={props.busy}
-        modelLabel={props.modelLabel}
+        modelPicker={props.modelPicker}
         autoFocus
       />
 

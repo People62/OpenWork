@@ -12,6 +12,7 @@ import { SidePanel } from "./shell/panel";
 import { Composer } from "./session/composer";
 import { Conversation } from "./session/conversation";
 import { EmptyHero } from "./session/empty-hero";
+import { ModelPicker } from "./session/model-picker";
 import { insideTauri } from "./tauri";
 import { WorkspaceSidebar } from "./workspace/sidebar";
 import { useAppState } from "./workspace/state";
@@ -35,6 +36,20 @@ function Workspace() {
   const [draft, setDraft] = useState("");
 
   const session = state.selectedSession;
+
+  // One picker, rendered in whichever composer is on screen. While a
+  // conversation is open it is locked: the engine fixes a session's model at
+  // creation and offers no way to change it, so a choice made here applies to
+  // the next task rather than pretending to change this one.
+  const picker = (
+    <ModelPicker
+      models={state.models}
+      value={state.model}
+      onChange={state.chooseModel}
+      locked={session !== null}
+      disabled={state.models.length === 0}
+    />
+  );
 
   async function send() {
     const content = draft.trim();
@@ -104,6 +119,7 @@ function Workspace() {
                 busy={state.running}
                 disabled={state.busy && !state.running}
                 placeholder="Reply…"
+                modelPicker={picker}
               />
             </div>
           </div>
@@ -111,7 +127,11 @@ function Workspace() {
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto py-10">
           {state.selectedWorkspace ? (
-            <EmptyHero onRunTask={(p) => void state.startTask(p)} busy={state.busy} />
+            <EmptyHero
+              onRunTask={(p) => void state.startTask(p)}
+              busy={state.busy}
+              modelPicker={picker}
+            />
           ) : (
             <NoWorkspace />
           )}

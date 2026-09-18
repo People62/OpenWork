@@ -20,6 +20,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { models as remembered } from "../session/model";
 import {
   commands,
   events,
@@ -44,6 +45,12 @@ export type AppState = {
   sessions: EngineSession[];
   selectedSession: EngineSession | null;
   messages: Message[];
+  /** Every model the engine offers in the selected workspace. */
+  models: Model[];
+  /** What the open session runs on, or what the next one will. */
+  model: Model | null;
+  /** Chooses the model the next session is created with. */
+  chooseModel: (model: Model) => void;
   /** Text arriving for a turn the engine has not finished writing down yet. */
   streaming: string | null;
   /** What you just sent, until the engine's own copy of it comes back. */
@@ -72,6 +79,8 @@ export function useAppState(): AppState {
   const [streaming, setStreaming] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [available, setAvailable] = useState<Model[]>([]);
+  const [preferred, setPreferred] = useState<Model | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -79,10 +88,6 @@ export function useAppState(): AppState {
   // listeners are installed once and would otherwise close over whichever
   // session happened to be open when they were.
   const listening = useRef<string | null>(null);
-  // Asked of the engine once per working directory. Provider availability
-  // depends on that directory — the same folder can offer dozens of models or
-  // none, depending on whether OpenCode recognises it as a project.
-  const model = useRef<Model | null>(null);
 
   const run = useCallback(async <T,>(work: () => Promise<T>): Promise<T | null> => {
     setBusy(true);
@@ -163,12 +168,24 @@ export function useAppState(): AppState {
 
     let cancelled = false;
     const path = selectedWorkspace.path;
-    model.current = null;
 
     void run(async () => {
       const status = await unwrap(commands.startEngine(path));
       if (cancelled) return;
       setEngine(status);
+
+      // Asked of the engine, never guessed. Provider availability depends on the
+      // working directory — the same folder can offer dozens of models or none,
+      // depending on whether OpenCode recognises it as a project.
+      const offered = await unwrap(commands.listModels());
+      if (cancelled) return;
+      setAvailable(offered);
+      // A remembered preference the engine no longer offers is not usable here.
+      // Falling back to the first is better than creating a session on a model
+      // that will fail with nothing on the event stream to say why.
+      const saved = remembered.preferred();
+      const usable = saved && offered.some((m) => m.providerID === saved.providerID && m.id === saved.id);
+      setPreferred(usable ? saved : (offered[0] ?? null));
 
       const list = await unwrap(commands.listEngineSessions(path));
       if (cancelled) return;
@@ -197,19 +214,6 @@ export function useAppState(): AppState {
     void loadMessages(selectedSession.id);
   }, [selectedSession, loadMessages]);
 
-  /// The model to fix on a new session.
-  ///
-  /// It must be set, not left out. The `/prompt` schema has no model field, so a
-  /// session without one falls back to the engine's default — and when that
-  /// default cannot be used, the failure never reaches the event stream at all.
-  /// The screen would simply hang.
-  const chooseModel = useCallback(async (): Promise<Model | null> => {
-    if (model.current) return model.current;
-    const list = await unwrap(commands.listModels());
-    model.current = list[0] ?? null;
-    return model.current;
-  }, []);
-
   const refreshSessions = useCallback(async (path: string) => {
     const list = await unwrap(commands.listEngineSessions(path));
     setSessions(list);
@@ -223,6 +227,12 @@ export function useAppState(): AppState {
     sessions,
     selectedSession,
     messages,
+    models: available,
+    // What the open session actually runs on wins over any preference: it is a
+    // fact, and the preference is only what the next one will start with.
+    model: selectedSession
+      ? (selectedSession.model ?? remembered.forSession(selectedSession.id) ?? preferred)
+      : preferred,
     streaming,
     pending,
     running,
@@ -230,6 +240,11 @@ export function useAppState(): AppState {
     busy,
     selectWorkspace: setSelectedWorkspace,
     selectSession: setSelectedSession,
+
+    chooseModel(model) {
+      remembered.prefer(model);
+      setPreferred(model);
+    },
 
     async createWorkspace(name, path) {
       const created = await run(() => unwrap(commands.createWorkspace(name, path)));
@@ -248,7 +263,14 @@ export function useAppState(): AppState {
         // it is not.
         await unwrap(commands.startEngine(workspace.path));
 
-        const id = await unwrap(commands.createEngineSession(await chooseModel()));
+        // The model must be set, not left out. The `/prompt` schema has no
+        // model field — measured: one sent there is accepted and ignored — so a
+        // session without one falls back to the engine's default, and when that
+        // default cannot be used the failure never reaches the event stream at
+        // all. The screen would simply hang.
+        const chosen = preferred;
+        const id = await unwrap(commands.createEngineSession(chosen));
+        if (chosen) remembered.remember(id, chosen);
         listening.current = id;
         setMessages([]);
         setPending(prompt);
