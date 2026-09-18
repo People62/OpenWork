@@ -32,11 +32,18 @@ import {
   type Workspace,
 } from "../tauri";
 
-/// The event carrying one piece of text as it is generated. Matched here rather
-/// than in Rust because Rust passes every event through untranslated on purpose
-/// — translating means guessing, and OpenCode's event names move between
-/// versions.
-const TEXT_DELTA = "session.next.text.delta";
+/// The engine's events, matched here rather than in Rust because Rust passes
+/// every event through untranslated on purpose — translating means guessing,
+/// and OpenCode's event names move between versions.
+///
+/// A delta does not say what kind of part it belongs to. Its `field` is `"text"`
+/// for reasoning as much as for the answer — the first delta of a real turn was
+/// the model's reasoning, not its reply. So the kind of every part is learned
+/// from `message.part.updated`, which the engine sends before a part's first
+/// delta (measured: not one delta arrived for a part whose kind was unknown),
+/// and only deltas of `text` parts reach the screen.
+const PART_UPDATED = "message.part.updated";
+const PART_DELTA = "message.part.delta";
 
 export type AppState = {
   workspaces: Workspace[];
@@ -81,6 +88,12 @@ export function useAppState(): AppState {
   const [running, setRunning] = useState(false);
   const [available, setAvailable] = useState<Model[]>([]);
   const [preferred, setPreferred] = useState<Model | null>(null);
+  /// What the next turn of the open conversation runs on. A conversation is not
+  /// fixed to one model — every prompt names its own — so this starts at
+  /// whatever the conversation last used and changes when someone picks.
+  const [sessionModel, setSessionModel] = useState<Model | null>(null);
+  const preferredNow = useRef<Model | null>(null);
+  preferredNow.current = preferred;
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -88,6 +101,12 @@ export function useAppState(): AppState {
   // listeners are installed once and would otherwise close over whichever
   // session happened to be open when they were.
   const listening = useRef<string | null>(null);
+  /// Part id to part kind, for the turn in flight. See `PART_DELTA`.
+  const partKinds = useRef(new Map<string, string>());
+  /// The text part the last delta belonged to, so a second text part in the
+  /// same turn — after a tool call, say — starts a new paragraph instead of
+  /// running on from the first.
+  const lastTextPart = useRef<string | null>(null);
 
   const run = useCallback(async <T,>(work: () => Promise<T>): Promise<T | null> => {
     setBusy(true);
@@ -132,10 +151,23 @@ export function useAppState(): AppState {
     const dropChunk = events.chunk.listen((e) => {
       const chunk = e.payload;
       if (chunk.engineSessionId !== listening.current) return;
-      if (chunk.kind !== TEXT_DELTA) return;
-      const text = (chunk.payload as { text?: unknown } | null)?.text;
-      if (typeof text !== "string") return;
-      setStreaming((before) => (before ?? "") + text);
+
+      if (chunk.kind === PART_UPDATED) {
+        const part = (chunk.payload as { part?: { id?: unknown; type?: unknown } } | null)?.part;
+        if (typeof part?.id === "string" && typeof part.type === "string") {
+          partKinds.current.set(part.id, part.type);
+        }
+        return;
+      }
+
+      if (chunk.kind !== PART_DELTA) return;
+      const { partID, delta } = (chunk.payload ?? {}) as { partID?: unknown; delta?: unknown };
+      if (typeof partID !== "string" || typeof delta !== "string") return;
+      if (partKinds.current.get(partID) !== "text") return;
+
+      const newPart = lastTextPart.current !== null && lastTextPart.current !== partID;
+      lastTextPart.current = partID;
+      setStreaming((before) => (before ?? "") + (newPart ? "\n\n" : "") + delta);
     });
 
     const dropFinished = events.finished.listen((e) => {
@@ -204,15 +236,30 @@ export function useAppState(): AppState {
 
   useEffect(() => {
     listening.current = selectedSession?.id ?? null;
+    resetTurn();
     setStreaming(null);
     setPending(null);
     setRunning(false);
     if (!selectedSession) {
       setMessages([]);
+      setSessionModel(null);
       return;
     }
+    // The engine's record of what this conversation last ran on wins: it is a
+    // fact. Our own note and the global preference are only fallbacks.
+    setSessionModel(
+      selectedSession.model ??
+        remembered.forSession(selectedSession.id) ??
+        preferredNow.current,
+    );
     void loadMessages(selectedSession.id);
   }, [selectedSession, loadMessages]);
+
+  /// Forgets the part kinds of the previous turn before a new one streams.
+  function resetTurn() {
+    partKinds.current.clear();
+    lastTextPart.current = null;
+  }
 
   const refreshSessions = useCallback(async (path: string) => {
     const list = await unwrap(commands.listEngineSessions(path));
@@ -228,11 +275,7 @@ export function useAppState(): AppState {
     selectedSession,
     messages,
     models: available,
-    // What the open session actually runs on wins over any preference: it is a
-    // fact, and the preference is only what the next one will start with.
-    model: selectedSession
-      ? (selectedSession.model ?? remembered.forSession(selectedSession.id) ?? preferred)
-      : preferred,
+    model: selectedSession ? sessionModel : preferred,
     streaming,
     pending,
     running,
@@ -241,9 +284,16 @@ export function useAppState(): AppState {
     selectWorkspace: setSelectedWorkspace,
     selectSession: setSelectedSession,
 
+    // Picking in an open conversation changes its next turn, and also becomes
+    // the default for new ones — the same as the reference, which treats a
+    // choice made anywhere as the person's current preference.
     chooseModel(model) {
       remembered.prefer(model);
       setPreferred(model);
+      if (selectedSession) {
+        remembered.remember(selectedSession.id, model);
+        setSessionModel(model);
+      }
     },
 
     async createWorkspace(name, path) {
@@ -263,21 +313,20 @@ export function useAppState(): AppState {
         // it is not.
         await unwrap(commands.startEngine(workspace.path));
 
-        // The model must be set, not left out. The `/prompt` schema has no
-        // model field — measured: one sent there is accepted and ignored — so a
-        // session without one falls back to the engine's default, and when that
-        // default cannot be used the failure never reaches the event stream at
-        // all. The screen would simply hang.
+        // Always with a model. Without one the engine falls back to its own
+        // default, which on the test machine is OpenCode's free tier — and that
+        // refuses to answer outside the OpenCode application.
         const chosen = preferred;
         const id = await unwrap(commands.createEngineSession(chosen));
         if (chosen) remembered.remember(id, chosen);
         listening.current = id;
+        resetTurn();
         setMessages([]);
         setPending(prompt);
         setStreaming(null);
         setRunning(true);
 
-        await unwrap(commands.sendPrompt(id, prompt));
+        await unwrap(commands.sendPrompt(id, prompt, chosen));
 
         // Read back rather than invented: the engine names the session itself,
         // and a row made up here would show a title it is about to replace.
@@ -289,11 +338,14 @@ export function useAppState(): AppState {
     async send(text) {
       const session = selectedSession;
       if (!session) return;
+      const model = sessionModel;
       await run(async () => {
+        resetTurn();
         setPending(text);
         setStreaming(null);
         setRunning(true);
-        await unwrap(commands.sendPrompt(session.id, text));
+        if (model) remembered.remember(session.id, model);
+        await unwrap(commands.sendPrompt(session.id, text, model));
       });
     },
 

@@ -572,15 +572,7 @@ mod conversation_tests {
             .expect("could not find the repository root");
 
         let engine = Engine::default();
-        // SAFETY: these tests run serially via --test-threads=1.
-        unsafe { std::env::set_var(locate::ENV_OVERRIDE, &binary) };
-        let status = engine
-            .start(&root, None)
-            .await
-            .expect("the engine should start");
-        unsafe { std::env::remove_var(locate::ENV_OVERRIDE) };
-
-        let client = client::Client::new(status.address.clone().expect("address"));
+        let client = client::Client::new(start_with_override(&engine, &root, &binary).await);
 
         // The model has to actually be available; otherwise the failure never
         // appears on the event stream at all — only in the engine's log.
@@ -605,21 +597,30 @@ mod conversation_tests {
         let stream_client = client.clone();
         let stream_session = session.id.clone();
         let stream_collected = collected.clone();
+        let (send_ready, receive_ready) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
             stream_client
-                .stream(&stream_session, receive_cancel, move |c| {
-                    stream_collected
-                        .lock()
-                        .expect("collection poisoned")
-                        .push(c);
-                })
+                .stream(
+                    &stream_session,
+                    receive_cancel,
+                    Some(send_ready),
+                    move |c| {
+                        stream_collected
+                            .lock()
+                            .expect("collection poisoned")
+                            .push(c);
+                    },
+                )
                 .await
         });
 
-        // Give the stream a moment to open before the prompt goes out.
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        receive_ready.await.expect("the stream never opened");
         client
-            .send_prompt(&session.id, "Count from 1 to 40, one number per line.")
+            .send_prompt(
+                &session.id,
+                "Count from 1 to 40, one number per line.",
+                Some(&model),
+            )
             .await
             .expect("the prompt was rejected");
 
@@ -720,15 +721,16 @@ mod conversation_tests {
         let (_cancel_send, cancel_receive) = tokio::sync::watch::channel(false);
         let stream_client = client.clone();
         let stream_session = session.id.clone();
+        let (send_ready, receive_ready) = tokio::sync::oneshot::channel();
         let streaming = tokio::spawn(async move {
             stream_client
-                .stream(&stream_session, cancel_receive, |_| {})
+                .stream(&stream_session, cancel_receive, Some(send_ready), |_| {})
                 .await
         });
 
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        receive_ready.await.expect("the stream never opened");
         client
-            .send_prompt(&session.id, asked)
+            .send_prompt(&session.id, asked, Some(&model))
             .await
             .expect("the prompt was rejected");
 
@@ -802,6 +804,87 @@ mod conversation_tests {
         engine.stop().await.expect("stopping failed");
     }
 
+    /// The provider round trip, through our own code against a real engine.
+    ///
+    /// It proves the one thing the API probes could not: that `set_provider_key`
+    /// sends a body the engine accepts, that `list_providers` parses a catalogue
+    /// of two hundred-odd entries, and that the restart is load-bearing rather
+    /// than defensive. Measured while writing this: on a running engine a key
+    /// that was just accepted left `connected` completely unchanged. Only after
+    /// a restart did the provider appear.
+    ///
+    /// **It writes to the real OpenCode credential store** — there is only one,
+    /// and the engine owns it. `anthropic` is used because it is in every
+    /// catalogue and the key is a plain nonsense string, so nothing real can be
+    /// overwritten; a machine that genuinely has an Anthropic key would have it
+    /// replaced, which is why the cleanup runs before any assertion does.
+    #[tokio::test]
+    async fn a_provider_key_connects_only_after_the_engine_restarts() {
+        let Some(binary) = std::env::var_os("RANTAI_OPENCODE_TEST").map(PathBuf::from) else {
+            eprintln!("skipped: RANTAI_OPENCODE_TEST is not set");
+            return;
+        };
+        if !binary.is_file() {
+            eprintln!("skipped: the test binary does not exist");
+            return;
+        }
+
+        const PROVIDER: &str = "anthropic";
+        let root = repository_root();
+        let engine = Engine::default();
+        let address = start_with_override(&engine, &root, &binary).await;
+        let client = client::Client::new(address);
+
+        let before = client.list_providers().await.expect("listing providers");
+        assert!(
+            before.all.len() > 50,
+            "the catalogue came back with only {} entries; the shape probably moved",
+            before.all.len()
+        );
+        assert!(
+            before.all.iter().any(|p| p.id == PROVIDER),
+            "{PROVIDER} is not in the catalogue, so this test cannot say anything"
+        );
+        let was_connected = before.connected.iter().any(|id| id == PROVIDER);
+
+        // Everything that can fail is collected rather than asserted, so the key
+        // is always taken back out again. A test that leaves a nonsense
+        // credential behind on the way to failing is worse than no test.
+        let write = client
+            .set_provider_key(PROVIDER, "sk-ant-not-a-real-key")
+            .await;
+        let before_restart = client.list_providers().await;
+        let restarted = engine.restart(None).await;
+        let after_restart = client.list_providers().await;
+
+        let removed = client.remove_provider_key(PROVIDER).await;
+        engine.stop().await.expect("stopping failed");
+
+        write.expect("the engine refused the key");
+        removed.expect("removing the key failed");
+        restarted.expect("the engine did not come back");
+
+        if !was_connected {
+            assert!(
+                !before_restart
+                    .expect("listing before the restart")
+                    .connected
+                    .iter()
+                    .any(|id| id == PROVIDER),
+                "{PROVIDER} appeared without a restart — the restart in \
+                 connect_provider would be unnecessary, and this test is stale"
+            );
+        }
+        assert!(
+            after_restart
+                .expect("listing after the restart")
+                .connected
+                .iter()
+                .any(|id| id == PROVIDER),
+            "{PROVIDER} did not connect even after the engine restarted"
+        );
+    }
+
     /// Every `text` part of every assistant message, joined.
     fn assistant_text(messages: &[client::Message]) -> String {
         messages
@@ -842,7 +925,27 @@ mod conversation_tests {
             .expect("could not find the repository root")
     }
 
+    /// Starts a real engine the way an installed application would find it.
+    ///
+    /// Every `*_API_KEY` is removed from this process's environment first, so
+    /// the engine — which inherits it — can only find credentials in OpenCode's
+    /// own store. That is the condition an installed application runs in, and
+    /// the one every earlier version of these tests did not: they passed
+    /// because the key happened to be in the developer's environment, while the
+    /// application they claimed to prove could not hold a conversation at all.
     async fn start_with_override(engine: &Engine, root: &Path, binary: &Path) -> String {
+        let keys: Vec<_> = std::env::vars_os()
+            .filter_map(|(name, _)| {
+                name.to_str()
+                    .filter(|n| n.ends_with("_API_KEY"))
+                    .map(str::to_owned)
+            })
+            .collect();
+        for name in keys {
+            // SAFETY: these tests run serially via --test-threads=1.
+            unsafe { std::env::remove_var(name) };
+        }
+
         // SAFETY: these tests run serially via --test-threads=1.
         unsafe { std::env::set_var(locate::ENV_OVERRIDE, binary) };
         let status = engine.start(root, None).await;

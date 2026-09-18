@@ -1,26 +1,21 @@
-// Which model a conversation runs on, and which one the next will.
+// Which model answers next, remembered across reloads.
 //
 // The choice lives here, in the browser, not in Rust and not in a config file.
-// That follows the reference, and the reason is the engine: a session's model is
-// fixed when the session is created and cannot be changed afterwards. Measured
-// against OpenCode v1.18.18, on a session deliberately created with no model at
-// all:
+// That follows the reference: it is a preference, and a preference belongs where
+// the person expressing it is. The engine has nothing to store — every prompt
+// names its own model, so the choice travels with each turn.
 //
-//   POST /session/{id}/prompt  {prompt, model}  -> 200, and the model ignored;
-//                                                  the turn ran on the engine's
-//                                                  free-tier default and failed
-//   POST /session/{id}/prompt  {parts, model}   -> 400, "Missing key at [prompt]"
-//   POST /session/{id}/prompt_async             -> no such route
-//   PATCH/PUT/POST /session/{id}                -> no such route
-//
-// So there is nothing for a backend to store. What an open conversation runs on
-// is a fact the engine already reports; what a *new* one will run on is a
-// preference, and a preference belongs where the person expressing it is.
+// This file used to say the opposite: that a session was fixed to its first
+// model, with a table of routes to prove it. Every route in that table was on
+// the engine's newer `/api` generation, and the conclusion was wrong. The older
+// generation, which conversations now go through, takes a model on every
+// prompt — measured by switching models between two turns of one session, each
+// turn answered by the model it named.
 //
 // Two levels, both remembered: a global default, and a per-session note of what
-// each conversation was started with. The per-session note is what makes
-// reopening a conversation show its own model rather than whatever was picked
-// last.
+// each conversation last ran on. The note is what makes reopening a
+// conversation show its own model rather than whatever was picked last — though
+// the engine's own record of a session's model wins over it when there is one.
 //
 // Deliberately not a subscribable store. One place reads it — the state hook,
 // which already holds the choice in React state and re-renders on its own — and
@@ -41,7 +36,7 @@ const REMEMBER_AT_MOST = 200;
 type Remembered = {
   /// What a new session is created with.
   preferred: Model | null;
-  /// What each session was created with, by engine session id.
+  /// What each session last ran on, by engine session id.
   bySession: Record<string, Model>;
 };
 
@@ -120,8 +115,8 @@ export const models = {
     set({ ...current, preferred: model });
   },
 
-  /// Notes what a session was actually created with, so reopening it shows its
-  /// own model rather than whatever was chosen since.
+  /// Notes what a session last ran on, so reopening it shows its own model
+  /// rather than whatever was chosen since.
   remember(sessionId: string, model: Model) {
     ensureHydrated();
     const bySession = { ...current.bySession, [sessionId]: model };

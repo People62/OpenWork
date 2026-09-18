@@ -90,36 +90,62 @@ function emit(listeners: Listeners, name: string, payload: unknown): void {
   }
 }
 
-/// Answers a prompt the way the engine would: a few tokens spread over a second,
-/// then the finished event, with the whole turn written into the message list so
-/// the reload that follows finds it.
+/// Answers a prompt the way the engine would, in the engine's own event shapes:
+/// a reasoning part and a text part announced by `message.part.updated`, then
+/// their deltas, then `session.idle` — with the whole turn written into the
+/// message list so the reload that follows finds it.
 ///
-/// Slow on purpose. An answer that appears instantly hides every bug that only
-/// shows up while text is arriving — the composer's Stop state, the scroll
+/// The reasoning part is there on purpose. Its deltas look exactly like the
+/// answer's — `field` is `"text"` for both — and the screen has to tell them
+/// apart by the kind it learned from `message.part.updated`. A mock that sent
+/// only answer text would never catch that going wrong.
+///
+/// Slow on purpose too. An answer that appears instantly hides every bug that
+/// only shows up while text is arriving — the composer's Stop state, the scroll
 /// following the bottom, a turn switching session halfway through.
 function answerPrompt(
   tables: Tables,
   listeners: Listeners,
   sessionId: string,
   prompt: string,
+  model: Row | null,
 ): void {
   const reply = `Mock mode: no engine behind this. You said "${prompt.slice(0, 80)}".`;
-  const words = reply.split(" ");
-  let index = 0;
+  const thinking = "The user wants a reply; this is reasoning and must not appear as the answer.";
+  const messageId = nextId("msg");
+  const reasoningPart = nextId("prt");
+  const textPart = nextId("prt");
+  const script: Array<() => void> = [];
 
-  const step = () => {
-    if (index < words.length) {
+  const announce = (id: string, type: string) => () =>
+    emit(listeners, "chunk", {
+      engineSessionId: sessionId,
+      kind: "message.part.updated",
+      payload: { sessionID: sessionId, part: { id, messageID: messageId, type } },
+    });
+  const words = (partId: string, text: string) =>
+    text.split(" ").map((word, index) => () =>
       emit(listeners, "chunk", {
         engineSessionId: sessionId,
-        kind: "session.next.text.delta",
-        payload: { text: (index === 0 ? "" : " ") + words[index] },
-      });
-      index += 1;
-      setTimeout(step, 60);
-      return;
-    }
+        kind: "message.part.delta",
+        payload: {
+          sessionID: sessionId,
+          messageID: messageId,
+          partID: partId,
+          field: "text",
+          delta: (index === 0 ? "" : " ") + word,
+        },
+      }),
+    );
 
+  script.push(announce(reasoningPart, "reasoning"), ...words(reasoningPart, thinking));
+  script.push(announce(textPart, "text"), ...words(textPart, reply));
+
+  const finish = () => {
     const now = Date.now();
+    const asModel = model
+      ? { providerID: String(model.providerID), id: String(model.id) }
+      : null;
     tables.messages[sessionId] = [
       ...(tables.messages[sessionId] ?? []),
       {
@@ -127,26 +153,35 @@ function answerPrompt(
         type: "user",
         time: { created: now - 1000, completed: null },
         text: prompt,
-        content: [],
+        content: [{ type: "text", text: prompt }],
+        model: asModel,
         finish: null,
         error: null,
       },
       {
-        id: nextId("msg"),
+        id: messageId,
         type: "assistant",
         time: { created: now, completed: now },
         text: null,
-        content: [{ type: "text", text: reply }],
+        content: [
+          { type: "reasoning", text: thinking },
+          { type: "text", text: reply },
+        ],
+        model: asModel,
         finish: "stop",
         error: null,
       },
     ];
     tables.sessions = tables.sessions.map((session) =>
       session.id === sessionId
-        ? { ...session, time: { ...(session.time as Row), updated: now } }
+        ? { ...session, model: asModel, time: { ...(session.time as Row), updated: now } }
         : session,
     );
-
+    emit(listeners, "chunk", {
+      engineSessionId: sessionId,
+      kind: "session.idle",
+      payload: { sessionID: sessionId },
+    });
     emit(listeners, "finished", {
       engineSessionId: sessionId,
       cancelled: false,
@@ -154,6 +189,16 @@ function answerPrompt(
     });
   };
 
+  let index = 0;
+  const step = () => {
+    if (index < script.length) {
+      script[index]();
+      index += 1;
+      setTimeout(step, 40);
+      return;
+    }
+    finish();
+  };
   setTimeout(step, 250);
 }
 
@@ -227,6 +272,7 @@ function answer(
         listeners,
         String(args.engineSessionId),
         String(args.text),
+        (args.model as Row | null | undefined) ?? null,
       );
       return null;
 

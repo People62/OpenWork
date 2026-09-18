@@ -90,10 +90,17 @@ export const commands = {
 } | null) => typedError<string, EngineError>(__TAURI_INVOKE("create_engine_session", { model })),
 	/**
 	 *  Sends a prompt, then streams the answer out as events. This command returns
-	 *  immediately; the stream runs in the background until it finishes or is
-	 *  stopped.
+	 *  once the prompt is accepted; the stream runs in the background until the
+	 *  turn ends or is stopped.
+	 * 
+	 *  `model` is the model that answers *this* turn. A conversation can change
+	 *  model between turns, so it travels with each prompt rather than living on
+	 *  the session.
 	 */
-	sendPrompt: (engineSessionId: string, text: string) => typedError<null, EngineError>(__TAURI_INVOKE("send_prompt", { engineSessionId, text })),
+	sendPrompt: (engineSessionId: string, text: string, model: {
+	providerID: string,
+	id: string,
+} | null) => typedError<null, EngineError>(__TAURI_INVOKE("send_prompt", { engineSessionId, text, model })),
 	/**
 	 *  Stops a conversation mid-flight — the engine side through `interrupt`, our
 	 *  side by closing the stream. Both are needed: closing the stream alone leaves
@@ -277,11 +284,12 @@ export type Greeting = {
 };
 
 /**
- *  One message in a conversation.
+ *  One message in a conversation, as the interface sees it.
  * 
- *  The two kinds are not the same shape, and flattening them would lose the
- *  difference: a user message carries flat `text`, an assistant message carries
- *  a list of typed parts. Both are kept as the engine gives them.
+ *  Built from the engine's `{info, parts}` pair rather than deserialised
+ *  straight into, so the interface keeps one flat shape and this file is the
+ *  only place that knows the engine nests it. A user message carries its prose
+ *  as `text`; an assistant message carries typed parts in `content`.
  */
 export type Message = Message_Serialize | Message_Deserialize;
 
@@ -291,11 +299,12 @@ export type MessageTime = {
 };
 
 /**
- *  One message in a conversation.
+ *  One message in a conversation, as the interface sees it.
  * 
- *  The two kinds are not the same shape, and flattening them would lose the
- *  difference: a user message carries flat `text`, an assistant message carries
- *  a list of typed parts. Both are kept as the engine gives them.
+ *  Built from the engine's `{info, parts}` pair rather than deserialised
+ *  straight into, so the interface keeps one flat shape and this file is the
+ *  only place that knows the engine nests it. A user message carries its prose
+ *  as `text`; an assistant message carries typed parts in `content`.
  */
 export type Message_Deserialize = {
 	id: string,
@@ -305,21 +314,31 @@ export type Message_Deserialize = {
 	 */
 	type: string,
 	time: MessageTime,
-	/**  Set on user messages. */
-	text?: string | null,
-	/**  Set on assistant messages. */
-	content?: Part_Deserialize[],
-	/**  `"stop"`, `"error"`, and whatever else the engine reports. */
-	finish?: string | null,
-	error?: unknown | null,
+	/**  The prose of a user message. */
+	text: string | null,
+	/**  Every part, in order. For a user message the prose is in `text` as well. */
+	content: Part_Deserialize[],
+	/**
+	 *  The model this message was sent to, or answered by. It can differ from
+	 *  turn to turn: a conversation is not fixed to one model.
+	 */
+	model: Model | null,
+	/**  `"stop"`, `"tool-calls"`, and whatever else the engine reports. */
+	finish: string | null,
+	/**
+	 *  Set when the turn failed or was stopped — `MessageAbortedError` for a
+	 *  turn someone pressed Stop on.
+	 */
+	error: unknown | null,
 };
 
 /**
- *  One message in a conversation.
+ *  One message in a conversation, as the interface sees it.
  * 
- *  The two kinds are not the same shape, and flattening them would lose the
- *  difference: a user message carries flat `text`, an assistant message carries
- *  a list of typed parts. Both are kept as the engine gives them.
+ *  Built from the engine's `{info, parts}` pair rather than deserialised
+ *  straight into, so the interface keeps one flat shape and this file is the
+ *  only place that knows the engine nests it. A user message carries its prose
+ *  as `text`; an assistant message carries typed parts in `content`.
  */
 export type Message_Serialize = {
 	id: string,
@@ -329,12 +348,21 @@ export type Message_Serialize = {
 	 */
 	type: string,
 	time: MessageTime,
-	/**  Set on user messages. */
+	/**  The prose of a user message. */
 	text: string | null,
-	/**  Set on assistant messages. */
+	/**  Every part, in order. For a user message the prose is in `text` as well. */
 	content: Part_Serialize[],
-	/**  `"stop"`, `"error"`, and whatever else the engine reports. */
+	/**
+	 *  The model this message was sent to, or answered by. It can differ from
+	 *  turn to turn: a conversation is not fixed to one model.
+	 */
+	model: Model | null,
+	/**  `"stop"`, `"tool-calls"`, and whatever else the engine reports. */
 	finish: string | null,
+	/**
+	 *  Set when the turn failed or was stopped — `MessageAbortedError` for a
+	 *  turn someone pressed Stop on.
+	 */
 	error: unknown | null,
 };
 

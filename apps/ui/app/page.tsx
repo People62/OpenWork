@@ -37,16 +37,14 @@ function Workspace() {
 
   const session = state.selectedSession;
 
-  // One picker, rendered in whichever composer is on screen. While a
-  // conversation is open it is locked: the engine fixes a session's model at
-  // creation and offers no way to change it, so a choice made here applies to
-  // the next task rather than pretending to change this one.
+  // One picker, rendered in whichever composer is on screen. In an open
+  // conversation it changes the next turn; on the empty screen, the new task.
   const picker = (
     <ModelPicker
       models={state.models}
       value={state.model}
       onChange={state.chooseModel}
-      locked={session !== null}
+      inConversation={session !== null}
       disabled={state.models.length === 0}
     />
   );
