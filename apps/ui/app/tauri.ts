@@ -20,6 +20,8 @@ export type {
   Finished,
   Greeting,
   Model,
+  Provider,
+  Providers,
   ToolState,
   UpdateAvailable,
   Workspace,

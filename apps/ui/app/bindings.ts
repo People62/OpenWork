@@ -40,6 +40,29 @@ export const commands = {
 	 */
 	listModels: () => typedError<Model[], EngineError>(__TAURI_INVOKE("list_models")),
 	/**
+	 *  The catalogue, and which of it is usable.
+	 * 
+	 *  The reply carries no keys. `GET /provider` sends them in plain text, and the
+	 *  type this deserialises into simply has no field for one — see `Provider` in
+	 *  `engine::client`.
+	 */
+	listProviders: () => typedError<Providers, EngineError>(__TAURI_INVOKE("list_providers")),
+	/**
+	 *  Stores an API key for a provider, then restarts the engine.
+	 * 
+	 *  The restart is not housekeeping. The engine works out its providers and
+	 *  models at startup and never again: measured, removing a provider's
+	 *  credentials from a running engine left every one of its models still listed.
+	 *  Without the restart, a key that was just added would connect nothing that the
+	 *  model picker could see.
+	 * 
+	 *  `key` is never logged, never returned, and never stored on this side. It
+	 *  exists in memory long enough to be handed to the engine.
+	 */
+	connectProvider: (providerId: string, key: string) => typedError<EngineStatus, EngineError>(__TAURI_INVOKE("connect_provider", { providerId, key })),
+	/**  Removes a provider's key, then restarts for the same reason. */
+	disconnectProvider: (providerId: string) => typedError<EngineStatus, EngineError>(__TAURI_INVOKE("disconnect_provider", { providerId })),
+	/**
 	 *  Every session the engine holds for `directory`, newest first.
 	 * 
 	 *  Rantai has no session table. OpenCode already stores sessions and their
@@ -378,6 +401,37 @@ export type PersistenceCheck = {
 	 *  written.
 	 */
 	marker: string,
+};
+
+/**
+ *  A provider in the engine's catalogue.
+ * 
+ *  **There is deliberately no `key` field, and one must never be added.**
+ *  `GET /provider` returns the API key in plain text for every provider that has
+ *  one. serde drops fields we do not declare, so the key stops here — it never
+ *  reaches `bindings.ts`, the screen, a log line, or an error message. Declaring
+ *  it "for completeness" would put a live credential on all four.
+ */
+export type Provider = {
+	id: string,
+	name?: string,
+	/**
+	 *  The environment variables this provider would read a key from. Shown so
+	 *  someone who would rather not paste a key into an application can see
+	 *  which variable to set instead.
+	 */
+	env?: string[],
+};
+
+/**  The catalogue, and which of it can actually be used. */
+export type Providers = {
+	all: Provider[],
+	/**
+	 *  Provider ids the engine considers usable right now. This is the engine's
+	 *  own answer, not ours — a provider can be connected through a key we
+	 *  stored, through an environment variable, or by needing nothing at all.
+	 */
+	connected: string[],
 };
 
 /**

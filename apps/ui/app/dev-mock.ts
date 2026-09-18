@@ -60,6 +60,8 @@ type Tables = {
   sessions: Row[];
   /// Keyed by engine session id, oldest first — the order the command returns.
   messages: Record<string, Row[]>;
+  providers: Row[];
+  connected: string[];
 };
 
 /// Handlers registered through `plugin:event|listen`, by the id handed back.
@@ -228,6 +230,29 @@ function answer(
       );
       return null;
 
+    // A fresh object every time, never the stored one.
+    //
+    // Returning the same reference twice made a real screen look broken: React
+    // skips a re-render when `setState` is handed the value it already has, so
+    // connecting a provider changed the data and changed nothing on screen. The
+    // actual command returns a new object per call; a mock that does not is a
+    // mock that invents bugs the application does not have.
+    case "list_providers":
+      return { all: [...tables.providers], connected: [...tables.connected] };
+
+    // Credentials never reach a fixture: the mock takes the key, forgets it
+    // instantly, and only moves the provider between the two lists. Keeping one
+    // here would put a real credential in a file that exists to be looked at.
+    case "connect_provider":
+    case "disconnect_provider": {
+      const id = String(args.providerId);
+      tables.connected =
+        command === "connect_provider"
+          ? [...new Set([...tables.connected, id])]
+          : tables.connected.filter((each) => each !== id);
+      return answers.engine_status ?? null;
+    }
+
     case "stop_conversation":
       emit(listeners, "finished", {
         engineSessionId: args.engineSessionId,
@@ -250,6 +275,9 @@ export function installDevMock(): void {
 
   const answers = withTimes(fixtures) as Answers;
   const sessions = (answers.list_engine_sessions as Row[] | undefined) ?? [];
+  const catalogue = (answers.list_providers as
+    | { all?: Row[]; connected?: string[] }
+    | undefined) ?? {};
   const tables: Tables = {
     workspaces: (answers.list_workspaces as Row[] | undefined) ?? [],
     sessions,
@@ -258,6 +286,8 @@ export function installDevMock(): void {
     messages: sessions[0]
       ? { [String(sessions[0].id)]: (answers.list_engine_messages as Row[]) ?? [] }
       : {},
+    providers: catalogue.all ?? [],
+    connected: catalogue.connected ?? [],
   };
   const listeners: Listeners = new Map();
 

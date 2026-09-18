@@ -144,5 +144,56 @@
       "finish": "stop",
       "error": null
     }
-  ]
+  ],
+  "list_providers": {
+    "all": [
+      {
+        "id": "anthropic",
+        "name": "Anthropic",
+        "env": [
+          "ANTHROPIC_API_KEY"
+        ]
+      },
+      {
+        "id": "openai",
+        "name": "OpenAI",
+        "env": [
+          "OPENAI_API_KEY"
+        ]
+      },
+      {
+        "id": "google",
+        "name": "Google",
+        "env": [
+          "GOOGLE_API_KEY",
+          "GEMINI_API_KEY"
+        ]
+      },
+      {
+        "id": "minimax",
+        "name": "MiniMax (minimax.io)",
+        "env": [
+          "MINIMAX_API_KEY"
+        ]
+      },
+      {
+        "id": "opencode",
+        "name": "OpenCode Zen",
+        "env": [
+          "OPENCODE_API_KEY"
+        ]
+      },
+      {
+        "id": "groq",
+        "name": "Groq",
+        "env": [
+          "GROQ_API_KEY"
+        ]
+      }
+    ],
+    "connected": [
+      "minimax",
+      "opencode"
+    ]
+  }
 }

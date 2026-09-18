@@ -12,6 +12,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { AppShell } from "../shell/app-shell";
+import { ProviderSettings } from "./providers";
 import { SECTIONS, GROUP_LABELS, findSection, sectionsIn } from "./sections";
 import {
   SidebarBody,
@@ -84,9 +85,13 @@ export default function Settings() {
               {open.title}
             </h2>
             <p className="text-muted-foreground text-[13px]">{open.description}</p>
-            <div className="border-dls-border bg-dls-surface rounded-2xl border p-4">
-              <p className="text-muted-foreground text-[13px]">{open.pending}</p>
-            </div>
+            {open.id === "ai" ? (
+              <ProviderSettings />
+            ) : (
+              <div className="border-dls-border bg-dls-surface rounded-2xl border p-4">
+                <p className="text-muted-foreground text-[13px]">{open.pending}</p>
+              </div>
+            )}
           </div>
         ) : (
           <Overview onOpen={setOpenId} />

@@ -164,6 +164,44 @@ pub struct ToolState {
     pub output: Option<String>,
 }
 
+/// A provider in the engine's catalogue.
+///
+/// **There is deliberately no `key` field, and one must never be added.**
+/// `GET /provider` returns the API key in plain text for every provider that has
+/// one. serde drops fields we do not declare, so the key stops here — it never
+/// reaches `bindings.ts`, the screen, a log line, or an error message. Declaring
+/// it "for completeness" would put a live credential on all four.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Provider {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    /// The environment variables this provider would read a key from. Shown so
+    /// someone who would rather not paste a key into an application can see
+    /// which variable to set instead.
+    #[serde(default)]
+    pub env: Vec<String>,
+}
+
+// There is no model count here on purpose. Carrying one meant reading the
+// engine's `models`, whose shape is a list for some providers and an object for
+// others, and folding it to a number — which makes the type read one way going
+// out and another coming in. specta refuses that, and it is right to: the
+// generated TypeScript would describe a shape nothing actually sends. What the
+// screen needs is answered by `connected` anyway.
+
+/// The catalogue, and which of it can actually be used.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Providers {
+    pub all: Vec<Provider>,
+    /// Provider ids the engine considers usable right now. This is the engine's
+    /// own answer, not ours — a provider can be connected through a key we
+    /// stored, through an environment variable, or by needing nothing at all.
+    pub connected: Vec<String>,
+}
+
 /// A model that is actually available, as reported by the engine.
 ///
 /// It must be asked for, never guessed: provider availability depends on the
@@ -212,6 +250,23 @@ pub struct Chunk {
     /// narrows it where it is actually used.
     #[specta(type = specta_typescript::Unknown)]
     pub payload: serde_json::Value,
+}
+
+/// Percent-encodes a path segment.
+///
+/// A provider id comes from the catalogue today, but it reaches this function as
+/// a plain string from the interface, and a `/` in it would silently address a
+/// different route.
+fn urlencode(segment: &str) -> String {
+    segment
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
 }
 
 /// Sends a request and unwraps `{"data": ...}`.
@@ -280,6 +335,83 @@ impl Client {
         serde_json::from_str::<Envelope<Vec<Model>>>(&body)
             .map(|e| e.data)
             .map_err(|e| EngineFailure::Http(format!("model list unreadable: {e}; body: {body}")))
+    }
+
+    /// The provider catalogue, and which of it is usable.
+    ///
+    /// **`/provider`, not `/api/provider`.** They are different endpoints:
+    /// `/api/provider` lists only the handful already connected, while this one
+    /// carries the whole catalogue — 221 entries on the development machine —
+    /// together with a `connected` list. Auth lives outside `/api` too.
+    pub async fn list_providers(&self) -> Result<Providers, EngineFailure> {
+        // No envelope on this one. It answers with the object directly, unlike
+        // everything under /api.
+        let response = self
+            .http
+            .get(self.url("/provider"))
+            .send()
+            .await
+            .map_err(to_failure)?;
+        let status = response.status();
+        let body = response.text().await.map_err(to_failure)?;
+        if !status.is_success() {
+            return Err(EngineFailure::Http(format!(
+                "reading the providers failed ({status}): {body}"
+            )));
+        }
+        serde_json::from_str::<Providers>(&body)
+            .map_err(|e| EngineFailure::Http(format!("provider list unreadable: {e}")))
+    }
+
+    /// Stores an API key for a provider, through the engine rather than by
+    /// writing its file.
+    ///
+    /// The engine owns `auth.json`; writing it behind the engine's back would
+    /// race whatever else has it open. This is also how the reference delivers
+    /// credentials.
+    ///
+    /// **Nothing here may put `key` in a message.** The response body is not
+    /// echoed on failure for that reason alone — on every other call it is, and
+    /// it helps; here it is the one place a credential could be reflected back
+    /// into a log. The status is enough to act on.
+    pub async fn set_provider_key(
+        &self,
+        provider_id: &str,
+        key: &str,
+    ) -> Result<(), EngineFailure> {
+        let response = self
+            .http
+            .put(self.url(&format!("/auth/{}", urlencode(provider_id))))
+            .json(&serde_json::json!({ "type": "api", "key": key }))
+            .send()
+            .await
+            .map_err(to_failure)?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(EngineFailure::Http(format!(
+                "the engine refused the key for {provider_id} ({status})"
+            )));
+        }
+        Ok(())
+    }
+
+    pub async fn remove_provider_key(&self, provider_id: &str) -> Result<(), EngineFailure> {
+        let response = self
+            .http
+            .delete(self.url(&format!("/auth/{}", urlencode(provider_id))))
+            .send()
+            .await
+            .map_err(to_failure)?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(EngineFailure::Http(format!(
+                "removing the key for {provider_id} failed ({status}): {body}"
+            )));
+        }
+        Ok(())
     }
 
     /// Every session the engine knows about in `directory`.

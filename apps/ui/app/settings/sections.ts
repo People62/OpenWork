@@ -70,7 +70,7 @@ export const SECTIONS: SettingsSection[] = [
     title: "AI Providers",
     description: "Connect services that provide AI models.",
     icon: SparklesIcon,
-    pending: "Providers are configured through OpenCode's own auth for now.",
+    pending: "",
   },
   {
     id: "appearance",
