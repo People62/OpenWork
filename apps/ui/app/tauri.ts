@@ -14,17 +14,25 @@ export type {
   DeepLink,
   DeepLinkStatus,
   EngineError,
+  EngineSession,
   EngineStatus,
   Error as CommandFailure,
   Finished,
   Greeting,
-  Message,
   Model,
-  Role,
-  Session,
+  ToolState,
   UpdateAvailable,
   Workspace,
 } from "./bindings";
+
+// A type that derives both `Serialize` and `Deserialize` in Rust reaches
+// TypeScript as two: a field with `#[serde(default)]` is optional coming in and
+// present going out, and specta is right to keep them apart. Commands hand us
+// the outgoing half, so that is the half the interface means when it says
+// `Message`. Naming it here rather than at every call site keeps the generated
+// name from spreading — renaming it in `bindings.ts` is not an option, because
+// nothing there is written by hand.
+export type { Message_Serialize as Message, Part_Serialize as Part } from "./bindings";
 
 export function insideTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;

@@ -114,7 +114,7 @@ jobs:
         run: |
           set -euo pipefail
           test -f apps/ui/out/index.html \
-            || { echo "apps/ui/out/index.html tidak ada — next build tidak menghasilkan apa pun"; exit 1; }
+            || { echo "apps/ui/out/index.html is missing — next build produced nothing"; exit 1; }
 
       # The updater's own signing key, not an OS code-signing certificate —
       # those are separate things. This one proves an update came from this
@@ -201,7 +201,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Ambil semua installer
+      - name: Collect every installer
         uses: actions/download-artifact@v4
         with:
           path: output

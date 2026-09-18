@@ -104,6 +104,32 @@ fn migrations() -> Migrations<'static> {
             CREATE INDEX idx_message_session ON message(session_id, created_at);
             "#,
         ),
+        // 3 — conversations go back to OpenCode, which never stopped storing
+        // them.
+        //
+        // `session` and `message` held a second copy of rows OpenCode already
+        // keeps in its own SQLite: title, model, cost, tokens, reasoning, tool
+        // calls, forks. That store is the one the engine reads as context for
+        // the next turn, so whenever the two parted company — a stream cut
+        // short, a compaction, a revert — the screen would show one
+        // conversation while the model answered from another.
+        //
+        // The rows are dropped rather than migrated anywhere. There is nowhere
+        // to migrate them *to*: every conversation held here was produced by an
+        // engine that wrote its own copy at the same time, and that copy is
+        // still there, richer than this one ever was.
+        //
+        // What stays is the workspace — a folder someone chose, under a name
+        // they chose. OpenCode derives its `project` from the path alone and has
+        // no room for the name.
+        M::up(
+            r#"
+            DROP INDEX IF EXISTS idx_message_session;
+            DROP TABLE IF EXISTS message;
+            DROP INDEX IF EXISTS idx_session_workspace;
+            DROP TABLE IF EXISTS session;
+            "#,
+        ),
     ])
 }
 
@@ -196,7 +222,11 @@ mod tests {
         )
         .expect("rows under the old schema");
 
-        migrations().to_latest(&mut c).expect("migration 2");
+        // Stops at 2 on purpose. Migration 3 drops the two tables this test is
+        // about, so running to the end would prove nothing about the rename —
+        // it would only prove the tables are gone, which is a different claim
+        // and has its own test below.
+        migrations().to_version(&mut c, 2).expect("migration 2");
 
         let (name, path): (String, String) = c
             .query_row(
@@ -223,6 +253,51 @@ mod tests {
             .expect("message survived");
         // The role values were translated too, not just the column names.
         assert_eq!((role.as_str(), content.as_str()), ("user", "halo"));
+    }
+
+    /// Migration 3 hands conversations back to OpenCode.
+    ///
+    /// What it must not do is take the workspace with them. A workspace is the
+    /// one row Rantai still owns — the folder someone chose, under the name they
+    /// chose — and OpenCode has nowhere to put that name.
+    #[test]
+    fn third_migration_drops_conversations_and_keeps_the_workspace() {
+        let mut c = Connection::open_in_memory().expect("in-memory database");
+        prepare(&c).expect("pragmas");
+
+        let only_first = Migrations::new(vec![migrations_first_only()]);
+        only_first.to_latest(&mut c).expect("migration 1");
+        c.execute_batch(
+            r#"
+            INSERT INTO workspace (id, nama, jalur, dibuat_pada)
+                VALUES ('w1', 'ruang', '/tmp/ruang', 1);
+            INSERT INTO sesi (id, workspace_id, judul, dibuat_pada, diperbarui_pada)
+                VALUES ('s1', 'w1', 'judul', 1, 2);
+            INSERT INTO pesan (id, sesi_id, peran, isi, dibuat_pada)
+                VALUES ('m1', 's1', 'pengguna', 'halo', 3);
+            "#,
+        )
+        .expect("rows under the old schema");
+
+        migrations().to_latest(&mut c).expect("every migration");
+
+        let name: String = c
+            .query_row("SELECT name FROM workspace WHERE id = 'w1'", [], |r| {
+                r.get(0)
+            })
+            .expect("the workspace survived");
+        assert_eq!(name, "ruang");
+
+        for gone in ["session", "message"] {
+            let count: i64 = c
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [gone],
+                    |r| r.get(0),
+                )
+                .expect("could not read sqlite_master");
+            assert_eq!(count, 0, "table `{gone}` is still there");
+        }
     }
 
     /// Migration 1 on its own, for the test above.

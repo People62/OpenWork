@@ -20,38 +20,6 @@
       "createdAt": -172800000
     }
   ],
-  "list_sessions": [
-    {
-      "id": "s1",
-      "workspaceId": "w1",
-      "title": "Looking at the release workflow",
-      "createdAt": -7200000,
-      "updatedAt": -600000
-    },
-    {
-      "id": "s2",
-      "workspaceId": "w1",
-      "title": "A session title long enough to need truncating somewhere",
-      "createdAt": -90000000,
-      "updatedAt": -86400000
-    }
-  ],
-  "list_messages": [
-    {
-      "id": "m1",
-      "sessionId": "s1",
-      "role": "user",
-      "content": "Why did the Windows job fail?",
-      "createdAt": -700000
-    },
-    {
-      "id": "m2",
-      "sessionId": "s1",
-      "role": "assistant",
-      "content": "The temp directory is on C: and the workspace on D:, and rename cannot cross drives.",
-      "createdAt": -690000
-    }
-  ],
   "check_database": {
     "writeReadIntact": true,
     "workspaceCount": 2,
@@ -59,11 +27,12 @@
     "messageCount": 2
   },
   "engine_status": {
-    "running": false,
-    "address": null,
-    "binaryPath": null,
-    "source": null,
-    "uptimeSeconds": null
+    "running": true,
+    "address": "http://127.0.0.1:4096",
+    "binaryPath": "/pretend/opencode",
+    "source": "Sidecar",
+    "uptimeSeconds": 42.0,
+    "workingDir": "/home/someone/openwork-new"
   },
   "deep_link_status": {
     "scheme": "openwork",
@@ -77,6 +46,103 @@
     "deepLink": null,
     "persistence": null
   },
-  "list_models": [],
-  "report_signal": null
+  "list_models": [
+    {
+      "providerID": "minimax",
+      "id": "MiniMax-M2.5"
+    },
+    {
+      "providerID": "anthropic",
+      "id": "claude-opus-5"
+    }
+  ],
+  "report_signal": null,
+  "start_engine": {
+    "running": true,
+    "address": "http://127.0.0.1:4096",
+    "binaryPath": "/pretend/opencode",
+    "source": "Sidecar",
+    "uptimeSeconds": 42.0,
+    "workingDir": "/home/someone/openwork-new"
+  },
+  "list_engine_sessions": [
+    {
+      "id": "ses_one",
+      "title": "Looking at the release workflow",
+      "model": {
+        "providerID": "minimax",
+        "id": "MiniMax-M2.5"
+      },
+      "time": {
+        "created": -7200000,
+        "updated": -600000
+      },
+      "location": {
+        "directory": "/home/someone/openwork-new"
+      }
+    },
+    {
+      "id": "ses_two",
+      "title": "A session title long enough to need truncating somewhere",
+      "model": {
+        "providerID": "minimax",
+        "id": "MiniMax-M2.5"
+      },
+      "time": {
+        "created": -90000000,
+        "updated": -86400000
+      },
+      "location": {
+        "directory": "/home/someone/openwork-new"
+      }
+    }
+  ],
+  "list_engine_messages": [
+    {
+      "id": "msg_one",
+      "type": "user",
+      "time": {
+        "created": -700000,
+        "completed": null
+      },
+      "text": "Why did the Windows job fail?",
+      "content": [],
+      "finish": null,
+      "error": null
+    },
+    {
+      "id": "msg_two",
+      "type": "assistant",
+      "time": {
+        "created": -690000,
+        "completed": -689000
+      },
+      "text": null,
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "Two different drives. rename(2) cannot cross a filesystem boundary, so the copy has to be explicit."
+        },
+        {
+          "type": "tool",
+          "tool": "read",
+          "callID": "call_one",
+          "state": {
+            "status": "completed",
+            "title": "read .github/workflows/release.yml",
+            "input": {
+              "path": ".github/workflows/release.yml"
+            },
+            "output": "runs-on: windows-latest"
+          }
+        },
+        {
+          "type": "text",
+          "text": "The temp directory is on C: and the workspace on D:, and rename cannot cross drives."
+        }
+      ],
+      "finish": "stop",
+      "error": null
+    }
+  ]
 }

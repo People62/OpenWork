@@ -94,8 +94,6 @@ export default function Diagnostics() {
             rows={[
               ["Write then read", check.writeReadIntact ? "intact" : "differed"],
               ["Workspaces", String(check.workspaceCount)],
-              ["Sessions", String(check.sessionCount)],
-              ["Messages", String(check.messageCount)],
             ]}
           />
         </Panel>

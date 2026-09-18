@@ -38,13 +38,26 @@ tanpa sengaja): asisten menyiapkan berkas dan menulis pesan commit ke sebuah
 berkas teks, lalu pengguna sendiri yang menjalankan:
 
 ```bash
-git commit -F <berkas-pesan>
+git commit -F <berkas-pesan>   # pesannya bahasa Inggris
 git push origin <cabang>
 ```
 
 **Cabang:** kerjakan di cabang, jangan langsung di `main`.
 
-**Bahasa:** pengguna berbahasa Indonesia. Jawab dalam bahasa Indonesia.
+**Bahasa — dua aturan yang berbeda:**
+
+- **Percakapan dengan pengguna:** bahasa Indonesia.
+- **Segala yang menghadap GitHub:** bahasa Inggris. Itu mencakup nama cabang,
+  pesan commit, judul dan isi pull request, catatan rilis, README, dan berkas
+  apa pun yang dibaca orang lain di repositori. Kode, komentar, dan doc-comment
+  memang sudah bahasa Inggris sejak refaktor nama.
+
+Berkas ini sendiri tetap bahasa Indonesia: ia catatan kerja untuk pemilik repo,
+bukan halaman yang dibaca pendatang.
+
+Cabang dinamai `phase-N/what-it-does`, bukan `fase-N/apa-isinya`. Cabang lama
+yang sudah di-merge dibiarkan apa adanya — mengganti nama sejarah tidak membeli
+apa pun.
 
 ---
 

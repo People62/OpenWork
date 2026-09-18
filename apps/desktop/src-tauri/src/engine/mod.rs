@@ -96,6 +96,8 @@ pub struct EngineStatus {
     pub binary_path: Option<String>,
     pub source: Option<String>,
     pub uptime_seconds: Option<f64>,
+    /// The folder the running engine works in, if it is running.
+    pub working_dir: Option<String>,
 }
 
 /// A live engine process.
@@ -105,6 +107,10 @@ struct Live {
     binary_path: PathBuf,
     source: Source,
     since: Instant,
+    /// The folder it was started in. Reading history works for any folder, but
+    /// creating a session and running a turn always land here — so this decides
+    /// which workspace the engine can actually work in.
+    working_dir: PathBuf,
 }
 
 /// Held by Tauri as state. One engine for the whole application in Release 1;
@@ -116,22 +122,7 @@ pub struct Engine {
 
 impl Engine {
     pub async fn status(&self) -> EngineStatus {
-        match &*self.live.lock().await {
-            Some(l) => EngineStatus {
-                running: true,
-                address: Some(l.address.clone()),
-                binary_path: Some(l.binary_path.display().to_string()),
-                source: Some(format!("{:?}", l.source)),
-                uptime_seconds: Some(l.since.elapsed().as_secs_f64()),
-            },
-            None => EngineStatus {
-                running: false,
-                address: None,
-                binary_path: None,
-                source: None,
-                uptime_seconds: None,
-            },
-        }
+        describe(self.live.lock().await.as_ref())
     }
 
     pub async fn address(&self) -> Result<String, EngineFailure> {
@@ -143,17 +134,38 @@ impl Engine {
             .ok_or(EngineFailure::NotRunning)
     }
 
-    /// Starts the engine inside `working_dir`, or returns the one already
-    /// running. Its errors name the cause, not the symptom.
+    /// Starts the engine inside `working_dir`.
+    ///
+    /// An engine already running in that same folder is returned as it is. One
+    /// running somewhere **else** is stopped and replaced: `?directory=` lets us
+    /// read any folder's history from any engine, but a session is created, and
+    /// a turn is run, in the engine's own cwd — so working in another workspace
+    /// means another process. This is what the reference does too.
+    ///
+    /// The whole thing happens under one lock. Releasing it between the check
+    /// and the spawn would let two workspace switches land at once and leave a
+    /// process with no handle to it — which is exactly how an orphan engine
+    /// happened before.
     pub async fn start(
         &self,
         working_dir: &Path,
         app_dir: Option<&Path>,
     ) -> Result<EngineStatus, EngineFailure> {
+        let wanted = canonical(working_dir);
         let mut guard = self.live.lock().await;
-        if guard.is_some() {
-            drop(guard);
-            return Ok(self.status().await);
+
+        if let Some(live) = guard.as_ref() {
+            if live.working_dir == wanted {
+                let status = describe(Some(live));
+                drop(guard);
+                return Ok(status);
+            }
+        }
+
+        // A different folder. Stop the old process before spawning the new one —
+        // two engines at once would both hold the same OpenCode storage open.
+        if let Some(live) = guard.take() {
+            shutdown(live).await;
         }
 
         let found = locate::locate(&locate::Search::from_env(app_dir))?;
@@ -168,7 +180,7 @@ impl Engine {
             .arg("0")
             .arg("--hostname")
             .arg("127.0.0.1")
-            .current_dir(working_dir)
+            .current_dir(&wanted)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             // Without this, closing the window leaves OpenCode alive in the
@@ -204,39 +216,76 @@ impl Engine {
             binary_path: found.path,
             source: found.source,
             since: Instant::now(),
+            working_dir: wanted,
         });
+        let status = describe(guard.as_ref());
         drop(guard);
 
-        Ok(self.status().await)
+        Ok(status)
     }
 
     /// Stops the engine. It is given a chance to close itself first, then forced.
     /// Safe to call when the engine is not running.
     pub async fn stop(&self) -> Result<(), EngineFailure> {
-        let Some(mut l) = self.live.lock().await.take() else {
+        let Some(live) = self.live.lock().await.take() else {
             return Ok(());
         };
-
-        let _ = l.child.start_kill();
-
-        let started = Instant::now();
-        loop {
-            match l.child.try_wait() {
-                Ok(Some(_)) => return Ok(()),
-                Ok(None) => {}
-                Err(_) => break,
-            }
-            if started.elapsed() > SHUTDOWN_TIMEOUT {
-                break;
-            }
-            tokio::time::sleep(PROBE_INTERVAL).await;
-        }
-
-        // If it is still alive by now, wait until it has actually been reaped —
-        // so no zombie is left behind.
-        let _ = l.child.kill().await;
-        let _ = l.child.wait().await;
+        shutdown(live).await;
         Ok(())
+    }
+}
+
+/// Ends a process: asked first, forced after `SHUTDOWN_TIMEOUT`, then reaped.
+///
+/// Reaping matters. Killing without waiting leaves a zombie, and a zombie still
+/// holds the port — the next start would fail with an error naming the port
+/// rather than the process that never died.
+async fn shutdown(mut live: Live) {
+    let _ = live.child.start_kill();
+
+    let started = Instant::now();
+    loop {
+        match live.child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => {}
+            Err(_) => break,
+        }
+        if started.elapsed() > SHUTDOWN_TIMEOUT {
+            break;
+        }
+        tokio::time::sleep(PROBE_INTERVAL).await;
+    }
+
+    let _ = live.child.kill().await;
+    let _ = live.child.wait().await;
+}
+
+/// The folder as the engine will see it. `canonicalize` resolves symlinks and
+/// trailing slashes, so `/home/x` and `/home/x/` compare equal; a path that does
+/// not exist is left alone and the spawn reports it.
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Status without taking the lock, for callers that already hold it.
+fn describe(live: Option<&Live>) -> EngineStatus {
+    match live {
+        Some(l) => EngineStatus {
+            running: true,
+            address: Some(l.address.clone()),
+            binary_path: Some(l.binary_path.display().to_string()),
+            source: Some(format!("{:?}", l.source)),
+            uptime_seconds: Some(l.since.elapsed().as_secs_f64()),
+            working_dir: Some(l.working_dir.display().to_string()),
+        },
+        None => EngineStatus {
+            running: false,
+            address: None,
+            binary_path: None,
+            source: None,
+            uptime_seconds: None,
+            working_dir: None,
+        },
     }
 }
 
