@@ -131,8 +131,8 @@ jobs:
         run: |
           set -euo pipefail
           test -f apps/ui/out/index.html \
-            || { echo "apps/ui/out/index.html tidak ada — next build tidak menghasilkan apa pun"; exit 1; }
-          echo "out/ berisi $(find apps/ui/out -type f | wc -l) berkas"
+            || { echo "apps/ui/out/index.html is missing — next build produced nothing"; exit 1; }
+          echo "out/ holds $(find apps/ui/out -type f | wc -l) files"
 
       - name: Build the installer
         working-directory: apps/desktop
@@ -143,7 +143,7 @@ jobs:
         run: |
           set -euo pipefail
           bundle=apps/desktop/src-tauri/target/release/bundle
-          test -d "${bundle}" || { echo "tidak ada direktori bundle — tidak ada installer yang terbangun"; exit 1; }
+          test -d "${bundle}" || { echo "no bundle directory — no installer was built"; exit 1; }
           echo "### ${{ matrix.webview }} · installer" >> "${GITHUB_STEP_SUMMARY}"
           echo '```' >> "${GITHUB_STEP_SUMMARY}"
           find "${bundle}" -maxdepth 2 -type f \
@@ -314,14 +314,14 @@ jobs:
         if: always()
         shell: bash
         run: |
-          laporan="${RANTAI_SMOKE_REPORT:-${RUNNER_TEMP}/rantai-smoke.json}"
-          echo "### ${{ matrix.webview }} · sinyal" >> "${GITHUB_STEP_SUMMARY}"
-          if [ -f "${laporan}" ]; then
+          report="${RANTAI_SMOKE_REPORT:-${RUNNER_TEMP}/rantai-smoke.json}"
+          echo "### ${{ matrix.webview }} · signals" >> "${GITHUB_STEP_SUMMARY}"
+          if [ -f "${report}" ]; then
             echo '```json' >> "${GITHUB_STEP_SUMMARY}"
-            cat "${laporan}" >> "${GITHUB_STEP_SUMMARY}"
+            cat "${report}" >> "${GITHUB_STEP_SUMMARY}"
             echo '```' >> "${GITHUB_STEP_SUMMARY}"
           else
-            echo 'Aplikasi tidak pernah menulis laporan — ia gagal sebelum sampai ke sana.' >> "${GITHUB_STEP_SUMMARY}"
+            echo 'The application never wrote a report — it failed before it got that far.' >> "${GITHUB_STEP_SUMMARY}"
           fi
 
       - name: Upload the installers
@@ -422,12 +422,12 @@ jobs:
           set -euo pipefail
           if ! git diff --exit-code -- apps/ui/app/bindings.ts; then
             echo
-            echo "bindings.ts tidak mutakhir terhadap perintah di Rust."
-            echo "Jalankan: cd apps/desktop/src-tauri && cargo test"
-            echo "lalu commit apps/ui/app/bindings.ts."
+            echo "bindings.ts is out of date with the commands in Rust."
+            echo "Run: cd apps/desktop/src-tauri && cargo test"
+            echo "then commit apps/ui/app/bindings.ts."
             exit 1
           fi
-          echo "bindings.ts mutakhir"
+          echo "bindings.ts is up to date"
 
       # Run after bindings are confirmed current — otherwise the typecheck could
       # pass against a stale file and hide the very thing this gate guards.
