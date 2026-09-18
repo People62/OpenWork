@@ -17,6 +17,7 @@ mod deeplink;
 mod domain;
 mod engine;
 mod error;
+mod providers;
 mod shell;
 mod smoke;
 mod update;
@@ -34,6 +35,21 @@ pub struct Greeting {
     arch: String,
     tauri_version: String,
     app_version: String,
+}
+
+/// The directory the application binary lives in — where the sidecar sits once
+/// the application is packaged.
+///
+/// Wanted by anything that may have to start the engine, which is now more than
+/// one module.
+pub fn app_resource_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    app.path().resource_dir().ok().or_else(|| {
+        std::env::current_exe()
+            .ok()?
+            .parent()
+            .map(std::path::PathBuf::from)
+    })
 }
 
 /// The first command, from Phase 0. It survives because smoke mode uses it to
@@ -67,6 +83,9 @@ fn builder() -> Builder<tauri::Wry> {
             conversation::start_engine,
             conversation::stop_engine,
             conversation::list_models,
+            providers::list_providers,
+            providers::connect_provider,
+            providers::disconnect_provider,
             conversation::list_engine_sessions,
             conversation::list_engine_messages,
             conversation::create_engine_session,

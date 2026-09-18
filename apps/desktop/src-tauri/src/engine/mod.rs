@@ -224,6 +224,37 @@ impl Engine {
         Ok(status)
     }
 
+    /// Starts again in the same folder.
+    ///
+    /// Needed because the engine works out its providers and models when it
+    /// starts and never again. Measured: with the engine running, removing a
+    /// provider's credentials left all 28 of its models still listed. So a
+    /// credential change that did not restart would leave the picker offering
+    /// models that cannot run, and hiding models that now can.
+    ///
+    /// Does nothing when nothing is running — there is no folder to start in,
+    /// and inventing one would put the engine somewhere nobody asked for.
+    pub async fn restart(&self, app_dir: Option<&Path>) -> Result<EngineStatus, EngineFailure> {
+        let Some(working_dir) = self
+            .live
+            .lock()
+            .await
+            .as_ref()
+            .map(|l| l.working_dir.clone())
+        else {
+            return Ok(EngineStatus {
+                running: false,
+                address: None,
+                binary_path: None,
+                source: None,
+                uptime_seconds: None,
+                working_dir: None,
+            });
+        };
+        self.stop().await?;
+        self.start(&working_dir, app_dir).await
+    }
+
     /// Stops the engine. It is given a chance to close itself first, then forced.
     /// Safe to call when the engine is not running.
     pub async fn stop(&self) -> Result<(), EngineFailure> {

@@ -9,10 +9,11 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use tauri_specta::Event;
 use tokio::sync::Mutex;
 
+use crate::app_resource_dir;
 use crate::engine::client::{Chunk, Client, EngineSession, Message, Model};
 use crate::engine::{Engine, EngineError, EngineStatus};
 
@@ -178,13 +179,4 @@ pub async fn stop_conversation(
 
     let client = Client::new(engine.address().await?);
     Ok(client.interrupt(&engine_session_id).await?)
-}
-
-/// The directory the application binary lives in — where the sidecar sits once
-/// the application is packaged.
-fn app_resource_dir(app: &AppHandle) -> Option<PathBuf> {
-    app.path()
-        .resource_dir()
-        .ok()
-        .or_else(|| std::env::current_exe().ok()?.parent().map(PathBuf::from))
 }

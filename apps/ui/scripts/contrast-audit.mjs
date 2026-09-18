@@ -84,6 +84,18 @@ const AUDIT = `(function () {
     // contrast would make it look like a filled-in value.
     if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") return;
 
+    // A disabled control is exempt. This is WCAG 2.1 SC 1.4.3 itself, which
+    // excludes "text or images of text that are part of an inactive user
+    // interface component", not a convenience added to make a number go green.
+    //
+    // It is enforced narrowly on purpose: only a control the browser reports as
+    // disabled, or one that says so through aria. Skipping by class name or by
+    // opacity would quietly exempt anything faint.
+    var control = el.closest("button, input, select, textarea, fieldset, [aria-disabled]");
+    if (control && (control.disabled === true || control.getAttribute("aria-disabled") === "true")) {
+      return;
+    }
+
     checked += 1;
     var fg = toRgba(style.color);
     var bg = backdrop(el);
